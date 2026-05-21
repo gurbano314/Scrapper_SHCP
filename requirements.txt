@@ -1,0 +1,8 @@
+streamlit
+pdfplumber
+PyMuPDF
+rapidocr-onnxruntime
+pandas
+xlsxwriter
+numpy
+pillow
