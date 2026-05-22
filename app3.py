@@ -22,7 +22,7 @@ import xlsxwriter
 
 # ── CONFIGURACIÓN DE PÁGINA ──────────────────────────────────
 st.set_page_config(
-    page_title="Extractor de Cotizaciones",
+    page_title="Extractor de Cotizaciones · EFIDEPORTE",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -583,4 +583,4 @@ with col_right:
                 use_container_width=True,
             )
         except Exception as e:
-            st.error(f"Error generando Excel: {e}")    
+            st.error(f"Error generando Excel: {e}")
