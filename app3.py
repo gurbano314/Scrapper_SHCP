@@ -1,9 +1,9 @@
 # ============================================================
 # EXTRACTOR DE COTIZACIONES PDF | app.py
-# Compatible con Streamlit Community Cloud + OCR Robusto
+# Compatible con Streamlit Community Cloud + OCR Robusto + IA Auditora
 # ============================================================
 
-import hashlib, io, re, os, yaml, pathlib, tempfile, datetime, sys
+import hashlib, io, re, os, yaml, pathlib, tempfile, datetime, sys, json
 from collections import defaultdict
 from typing import Optional
 import fitz
@@ -12,6 +12,7 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 import xlsxwriter
+import google.generativeai as genai
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE PÁGINA
@@ -234,7 +235,6 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
                 for idx_pu, pu_cand in enumerate(numbers):
                     for idx_qty, qty_cand in enumerate(numbers):
                         if idx_tot != idx_pu and idx_tot != idx_qty and idx_pu != idx_qty:
-                            # Triangulación aritmética: Cantidad * Precio Unitario = Importe Total
                             if 1 <= qty_cand <= 50000 and abs(qty_cand * pu_cand - total_cand) < 5.0:
                                 combo_key = (int(qty_cand), round(pu_cand, 2), round(total_cand, 2))
                                 if combo_key not in seen_combinations:
@@ -524,6 +524,44 @@ with R:
         for col, val, lbl in [(k1, ts_, "Total Extraído"), (k2, rs_, "Monto Referencia"), (k3, dif, "Diferencia")]:
             clr = "#1a2744" if lbl != "Diferencia" else ("#c0392b" if abs(dif) > .01 else "#28a745")
             col.markdown(f'<div class="kpi"><div class="v" style="color:{clr}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
+        
+        # ==========================================
+        # NUEVO BOTÓN: AUDITORÍA CON IA
+        # ==========================================
+        if st.button("🤖 Auditar montos con IA", type="secondary", use_container_width=True):
+            with st.spinner("La IA está revisando matemáticamente el documento..."):
+                try:
+                    # Configurar la llave desde los secretos
+                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    
+                    # Convertir el dataframe a diccionario para que la IA lo entienda
+                    datos_extraidos = st.session_state.df.to_dict(orient="records")
+                    
+                    prompt = f"""
+                    Eres un auditor financiero experto. Revisa estos datos extraídos de una cotización.
+                    Verifica que las matemáticas cuadren perfectamente:
+                    1. ¿Cantidad * Precio Unitario = Subtotal?
+                    2. ¿El IVA 16% es matemáticamente correcto según el subtotal?
+                    3. ¿Subtotal + IVA = Total con IVA?
+                    
+                    Datos: {datos_extraidos}
+                    
+                    Responde EXCLUSIVAMENTE con un JSON válido con esta estructura exacta:
+                    {{"observacion_general": "Tu análisis corto y directo sobre si los montos cuadran matemáticamente o si hay discrepancias"}}
+                    """
+                    
+                    response = model.generate_content(prompt)
+                    # Limpiar el texto devuelto por si la IA le pone formato markdown
+                    texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
+                    resultado_ia = json.loads(texto_limpio)
+                    
+                    st.success("✅ Auditoría completada")
+                    st.info(f"**Veredicto de la IA:** {resultado_ia.get('observacion_general', 'Sin comentarios')}")
+                    
+                except Exception as e:
+                    st.error(f"Error al conectar con la IA: Por favor, asegúrate de haber configurado tu API Key en los Secrets de Streamlit. {e}")
+        # ==========================================
         
         def update_df(): st.session_state.df = st.session_state.editor_datos
 
