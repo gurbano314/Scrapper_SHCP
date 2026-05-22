@@ -48,14 +48,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-# CONSTANTES
+# CONSTANTES Y REGEX MEJORADOS PARA OCR
 # ─────────────────────────────────────────────────────────────
 _MONEY_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d{1,2})?)|(?<!\d)([\d]{1,3}(?:,\d{3})+(?:\.\d{1,2})?)")
+
+# Regex tolerante a errores de OCR (puntos en lugar de barras, espacios extra)
 _DATE_RE = re.compile(
-    r"(\d{1,2})\s+de\s+(\w+)[,\s]+(?:del?\s+)?(\d{4})|"
-    r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})|"
-    r"(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})"
+    r"(\d{1,2})\s*(?:de)?\s*([a-zA-Z]+)[,\s]*(?:del?\s*)?(\d{4})|"
+    r"(\d{4})[\s\.\-\/]+(\d{1,2})[\s\.\-\/]+(\d{1,2})|"
+    r"(\d{1,2})[\s\.\-\/]+(\d{1,2})[\s\.\-\/]+(\d{2,4})"
 )
+
 _ITEM_RE = re.compile(r"^\d+\s+(\d+)\s+\w+\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$")
 _MESES = {
     "enero":1, "febrero":2, "marzo":3, "abril":4, "mayo":5, "junio":6,
@@ -83,25 +86,17 @@ for k, v in {
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def _get_ocr_engine():
-    """
-    Inicializa RapidOCR con manejo robusto para Cloud.
-    Muestra el error en pantalla si faltan dependencias del SO.
-    """
     try:
         from rapidocr_onnxruntime import RapidOCR
-        # RapidOCR descarga modelos a ~/.rapidocr en primera ejecución
         ocr = RapidOCR(det_model_dir=None, rec_model_dir=None, cls_model_dir=None)
         return ocr
     except Exception as e:
-        # Error visible para depurar falta de librerías (ej. libgl1) en Cloud
         st.error(f"⚠️ Error cargando motor OCR: {str(e)}")
         return None
 
 def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
-    """OCR con fallback automático. Nunca crashea."""
     ocr = _get_ocr_engine()
-    if ocr is None:
-        return ""  # Fallback: retornar vacío
+    if ocr is None: return ""
     
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
@@ -138,7 +133,17 @@ def _date(text: str) -> Optional[datetime.date]:
         g = m.groups()
         try:
             if g[0]: 
-                return datetime.date(int(g[2]), _MESES.get(g[1], 1), int(g[0]))
+                # Buscar en el diccionario de meses
+                mes_str = g[1].lower()
+                mes_num = _MESES.get(mes_str)
+                # Intento OCR: Si no es perfecto, buscar subcadenas (ej. "marzo" en "lVlarzo")
+                if not mes_num:
+                    for k, v in _MESES.items():
+                        if k in mes_str or mes_str in k:
+                            mes_num = v
+                            break
+                if mes_num:
+                    return datetime.date(int(g[2]), mes_num, int(g[0]))
             if g[3]: 
                 return datetime.date(int(g[3]), int(g[4]), int(g[5]))
             if g[6]:
@@ -157,11 +162,7 @@ def _render(pdf_bytes: bytes, idx: int) -> bytes:
         pix = doc[idx].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), colorspace=fitz.csRGB, alpha=False)
         return pix.tobytes("png")
 
-# ─────────────────────────────────────────────────────────────
-# PARSER DE TABLAS CON ESPACIOS/TABS
-# ─────────────────────────────────────────────────────────────
 def _parse_space_table(text: str) -> list[dict]:
-    """Detecta filas de cotización sin bordes usando regex posicional."""
     items = []
     for line in text.splitlines():
         m = _ITEM_RE.match(line.strip())
@@ -189,124 +190,114 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
             txt = pg.extract_text() or ""
             text += "\n" + txt
             
-            # Tablas nativas con bordes
             for tbl in pg.extract_tables():
                 if tbl:
                     table_rows.extend([str(c or "").strip() for c in r] for r in tbl if r)
             
-            # Tablas sin bordes alineadas con espacios/tabs
             for item in _parse_space_table(txt):
                 table_rows.append([
                     str(item["qty"]), item["desc"],
                     f"${item['pu']:,.2f}", f"${item['total']:,.2f}"
                 ])
     
-    # Nivel 3: OCR si el texto es insuficiente O SI EL USUARIO LO FUERZA
+    # Nivel 3: OCR
     if forzar_ocr or len(text.strip()) < 30:
         for i in pr:
             ocr_text = _ocr_page(pdf_bytes, i)
             if ocr_text:
                 text += "\n" + ocr_text
-                # Parsear también el texto OCR como tabla espacial
                 for item in _parse_space_table(ocr_text):
                     table_rows.append([
                         str(item["qty"]), item["desc"],
                         f"${item['pu']:,.2f}", f"${item['total']:,.2f}"
                     ])
     
-    fecha = _date(text)
     tlow = text.lower()
     iva_f = "Sí" if det_iva and re.search(r"\biva\b|16%|vat", tlow) else "N/M"
     
-    tot = iva = sub = pu = None
+    tot = iva = sub = pu = fecha = None
     qty = 1
+    obs = ""
     
-    # Extracción de montos desde filas de tabla
+    # Extracción Básica (Tablas)
     for row in table_rows:
         j, s = "   ".join(row).lower(), "   ".join(row)
         if "total" in j and not re.search(r"sub|parcial", j):
             v = _money(s)
-            if v and (tot is None or v > tot): 
-                tot = v
+            if v and (tot is None or v > tot): tot = v
         if re.search(r"\biva\b|16%|vat", j):
             v = _money(s)
-            if v: 
-                iva = v
-        if re.search(r"subtotal|sin\s*iva", j):
+            if v: iva = v
+        if re.search(r"subtotal|sin\s*iva|importe", j):
             v = _money(s)
-            if v: 
-                sub = v
-    
-    # Suma de ítems individuales cuando no hay fila "Total"
-    if tot is None and table_rows:
-        item_totals = []
-        for row in table_rows:
-            nums = [_money(c) for c in row if _money(c) is not None]
-            if nums and nums[-1] > 0:
-                item_totals.append(nums[-1])
-        if item_totals and len(item_totals) >= 2:
-            tot = round(sum(item_totals), 2)
-    
-    # Fallback texto libre
-    if tot is None:
-        for ln in text.splitlines():
-            if re.search(r"\btotal\b", ln, re.I) and not re.search(r"sub|parcial", ln, re.I):
-                v = _money(ln)
-                if v and (tot is None or v > tot): 
-                    tot = v
-                    
-    obs = ""
-    
+            if v: sub = v
+            
+        # Intentar extraer Cantidad y PU de las filas si son puramente numéricas
+        nf = []
+        for t in re.findall(r"[\d,]+(?:\.\d+)?", s):
+            try: nf.append(float(t.replace(",", "")))
+            except ValueError: continue
+        if len(nf) >= 2 and 1 <= nf[0] <= 999 and nf[-1] > 0:
+            qty = int(nf[0])
+            pu = nf[-2] if len(nf) > 2 else nf[-1]
+
     # ======================================================================
-    # NUEVO FALLBACK DE EMERGENCIA: Buscar CUALQUIER monto
+    # ESCANEO PROFUNDO DE EMERGENCIA (Texto Libre + OCR)
     # ======================================================================
+    # Buscar Fecha en cualquier línea
+    for ln in text.splitlines():
+        if fecha is None:
+            m_date = _date(ln)
+            if m_date: fecha = m_date
+    
+    # Buscar Total si fallaron las tablas
     if tot is None:
         posibles_montos = []
-        # Buscar en todo el texto (nativo o crudo de OCR)
         for ln in text.splitlines():
+            # Buscar explícitamente la palabra "Total"
+            if re.search(r"\btotal\b", ln, re.I) and not re.search(r"sub|parcial", ln, re.I):
+                v = _money(ln)
+                if v: tot = v
+            
+            # Recolectar cualquier número para el fallback extremo
             for m in _MONEY_RE.finditer(ln):
                 raw = m.group(1) or m.group(2)
                 if raw:
                     try:
                         val = float(raw.replace(",", ""))
                         if val > 0: posibles_montos.append(val)
-                    except ValueError:
-                        continue
-                        
-        # Buscar también en celdas por si se omitió algo
+                    except ValueError: continue
+                    
         for row in table_rows:
             for cell in row:
                 val = _money(cell)
-                if val is not None and val > 0:
-                    posibles_montos.append(val)
-                    
-        # Asignar el monto mayor encontrado como Total
-        if posibles_montos:
+                if val is not None and val > 0: posibles_montos.append(val)
+                
+        # Asignar el monto mayor encontrado como Total si la palabra no aparece
+        if tot is None and posibles_montos:
             tot = max(posibles_montos)
-            obs = "Total inferido (monto máximo encontrado)"
-    # ======================================================================
-    
+            obs = "Total inferido (monto máximo)"
+            
+    # Buscar Subtotal
+    if sub is None:
+        for ln in text.splitlines():
+            if re.search(r"sub\s*total|importe|sin\s*iva", ln, re.I) and not re.search(r"total\b", ln.replace("subtotal", ""), re.I):
+                v = _money(ln)
+                if v and (tot is None or v <= tot):
+                    sub = v
+                    break
+
+    # Buscar IVA
     if iva is None and iva_f == "Sí":
         for ln in text.splitlines():
-            if re.search(r"\biva\b|16%|vat", ln, re.I):
+            if re.search(r"\biva\b|16%|vat|impuesto", ln, re.I):
                 v = _money(ln)
-                if v: 
+                if v and (tot is None or v < tot):
                     iva = v
                     break
+    # ======================================================================
     
-    # Cantidad y precio unitario
-    for row in table_rows:
-        nf = []
-        for t in re.findall(r"[\d,]+(?:\.\d+)?", "   ".join(row)):
-            try: 
-                nf.append(float(t.replace(",", "")))
-            except ValueError: 
-                continue
-        if len(nf) >= 2 and 1 <= nf[0] <= 999 and nf[-1] > 0:
-            qty = int(nf[0])
-            pu = nf[-2] if len(nf) > 2 else nf[-1]
-    
-    # Lógica de montos
+    # Lógica de triangulación matemática final
     if tot and not sub and not iva and iva_f == "Sí":
         sub = round(tot / 1.16, 2)
         iva = round(tot - sub, 2)
@@ -319,7 +310,8 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
         iva = round(sub * 0.16, 2)
         tot = round(sub + iva, 2)
     
-    if pu is None and sub:
+    # Inferir Precio Unitario si no se encontró
+    if pu is None and sub is not None:
         pu = round(sub / qty, 2) if qty else sub
     
     return {
@@ -374,17 +366,15 @@ def to_excel(df: pd.DataFrame) -> bytes:
     D, n = 1, len(df)
     for i, (_, row) in enumerate(df.iterrows()):
         r0, r1 = D + i, D + i + 1
-        fecha = row.get("Fecha")
-        if isinstance(fecha, str):
-            try: 
-                fecha = datetime.date.fromisoformat(fecha)
-            except: 
-                fecha = None
-        if isinstance(fecha, (datetime.date, datetime.datetime)): 
-            dt = datetime.datetime.combine(fecha, datetime.time()) if isinstance(fecha, datetime.date) else fecha
+        fecha_val = row.get("Fecha")
+        if isinstance(fecha_val, str):
+            try: fecha_val = datetime.date.fromisoformat(fecha_val)
+            except: fecha_val = None
+        if isinstance(fecha_val, (datetime.date, datetime.datetime)): 
+            dt = datetime.datetime.combine(fecha_val, datetime.time()) if isinstance(fecha_val, datetime.date) else fecha_val
             ws.write_datetime(r0, 0, dt, df_)
         else:
-            ws.write(r0, 0, str(fecha or ""), df_)
+            ws.write(r0, 0, str(fecha_val or ""), df_)
         
         ws.write(r0, 1, str(row.get("Rubro", "") or ""), of)
         ws.write(r0, 2, str(row.get("QT", "Sí")), tf)
@@ -446,7 +436,6 @@ with st.sidebar:
     cfgs = st.session_state.sec_cfg
     tp = st.session_state.total_pages or 1
     
-    # Agregar 'forzar_ocr' a los diccionarios de configuración
     while len(cfgs) < n:
         i = len(cfgs) + 1
         cfgs.append({"label": f"Sección {i}", "p0": i, "p1": i, "det_iva": True, "calc_sub": True, "forzar_ocr": False})
@@ -460,7 +449,6 @@ with st.sidebar:
             c["p1"] = b.number_input("Pág. Fin", c["p0"], tp, max(min(c["p1"], tp), c["p0"]), key=f"p1{i}")
             c["det_iva"] = st.checkbox("Detectar IVA", value=c["det_iva"], key=f"iv{i}")
             c["calc_sub"] = st.checkbox("Calcular subtotal si falta", value=c["calc_sub"], key=f"cs{i}")
-            # Nuevo control para activar el OCR manualmente por sección
             c["forzar_ocr"] = st.checkbox("Forzar OCR (Ignorar texto nativo)", value=c.get("forzar_ocr", False), key=f"fo{i}")
     
     st.markdown("---")
@@ -521,11 +509,9 @@ with L:
     cp = st.session_state.current_page
     
     c1, c2, c3 = st.columns([1, 4, 1])
-    if c1.button("◀", key="pv"): 
-        cp = max(0, cp - 1)
+    if c1.button("◀", key="pv"): cp = max(0, cp - 1)
     cp = int(c2.number_input("", 1, tp, cp + 1, label_visibility="collapsed", key="pg")) - 1
-    if c3.button("▶", key="nx"): 
-        cp = min(tp - 1, cp + 1)
+    if c3.button("▶", key="nx"): cp = min(tp - 1, cp + 1)
     
     st.session_state.current_page = cp
     st.caption(f"Página {cp+1} de {tp}")
@@ -557,7 +543,6 @@ with R:
             col.markdown(f'<div class="kpi"><div class="v" style="color:{clr}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
         
         def update_df():
-            # Función de callback para asegurar que los cambios persistan en el estado
             st.session_state.df = st.session_state.editor_datos
 
         ed = st.data_editor(
@@ -583,9 +568,7 @@ with R:
                 "Observaciones": st.column_config.TextColumn("Observaciones", width="large"),
             },
         )
-        # Asignación de respaldo
-        if ed is not None:
-            st.session_state.df = ed
+        if ed is not None: st.session_state.df = ed
         
         st.markdown("---")
         try:
