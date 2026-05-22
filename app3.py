@@ -533,7 +533,7 @@ with R:
                 try:
                     # Configurar la llave desde los secretos
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                    model = genai.GenerativeModel('gemini-pro')
                     
                     # Convertir el dataframe a diccionario para que la IA lo entienda
                     datos_extraidos = st.session_state.df.to_dict(orient="records")
