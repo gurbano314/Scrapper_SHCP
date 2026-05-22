@@ -48,7 +48,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
-# CONSTANTES (Regex corregidos - sin espacios en raw strings)
+# CONSTANTES
 # ─────────────────────────────────────────────────────────────
 _MONEY_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d{1,2})?)|(?<!\d)([\d]{1,3}(?:,\d{3})+(?:\.\d{1,2})?)")
 _DATE_RE = re.compile(
@@ -85,24 +85,23 @@ for k, v in {
 def _get_ocr_engine():
     """
     Inicializa RapidOCR con manejo robusto para Cloud.
-    Retorna None si no está disponible (fallback a texto nativo).
+    Muestra el error en pantalla si faltan dependencias del SO.
     """
     try:
         from rapidocr_onnxruntime import RapidOCR
-        
-        # Intentar inicializar con configuración por defecto
         # RapidOCR descarga modelos a ~/.rapidocr en primera ejecución
         ocr = RapidOCR(det_model_dir=None, rec_model_dir=None, cls_model_dir=None)
         return ocr
-    except Exception:
-        # Fallback silencioso: Cloud puede no permitir descarga de modelos
+    except Exception as e:
+        # Error visible para depurar falta de librerías (ej. libgl1) en Cloud
+        st.error(f"⚠️ Error cargando motor OCR: {str(e)}")
         return None
 
 def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
     """OCR con fallback automático. Nunca crashea."""
     ocr = _get_ocr_engine()
     if ocr is None:
-        return ""  # Fallback: retornar vacío, se usará texto nativo
+        return ""  # Fallback: retornar vacío
     
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
@@ -110,7 +109,8 @@ def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
             img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:, :, ::-1]
             result, _ = ocr(img)
             return "\n".join(r[1] for r in result if r and len(r) > 1) if result else ""
-    except Exception:
+    except Exception as e:
+        st.warning(f"⚠️ Error procesando OCR en página {idx+1}: {str(e)}")
         return ""
 
 # ─────────────────────────────────────────────────────────────
@@ -178,12 +178,7 @@ def _parse_space_table(text: str) -> list[dict]:
 # ─────────────────────────────────────────────────────────────
 # MOTOR DE EXTRACCIÓN (3 NIVELES + FALLBACK CLOUD)
 # ─────────────────────────────────────────────────────────────
-def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_sub: bool) -> dict:
-    """
-    Nivel 1 – tablas nativas (pdfplumber)
-    Nivel 2 – texto libre + regex (incluye tablas con espacios)
-    Nivel 3 – OCR (páginas escaneadas) - con fallback en Cloud
-    """
+def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_sub: bool, forzar_ocr: bool) -> dict:
     text, table_rows = "", []
     
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -206,8 +201,8 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
                     f"${item['pu']:,.2f}", f"${item['total']:,.2f}"
                 ])
     
-    # Nivel 3: OCR si el texto es insuficiente (solo si está disponible)
-    if len(text.strip()) < 30:
+    # Nivel 3: OCR si el texto es insuficiente O SI EL USUARIO LO FUERZA
+    if forzar_ocr or len(text.strip()) < 30:
         for i in pr:
             ocr_text = _ocr_page(pdf_bytes, i)
             if ocr_text:
@@ -259,6 +254,37 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
                 v = _money(ln)
                 if v and (tot is None or v > tot): 
                     tot = v
+                    
+    obs = ""
+    
+    # ======================================================================
+    # NUEVO FALLBACK DE EMERGENCIA: Buscar CUALQUIER monto
+    # ======================================================================
+    if tot is None:
+        posibles_montos = []
+        # Buscar en todo el texto (nativo o crudo de OCR)
+        for ln in text.splitlines():
+            for m in _MONEY_RE.finditer(ln):
+                raw = m.group(1) or m.group(2)
+                if raw:
+                    try:
+                        val = float(raw.replace(",", ""))
+                        if val > 0: posibles_montos.append(val)
+                    except ValueError:
+                        continue
+                        
+        # Buscar también en celdas por si se omitió algo
+        for row in table_rows:
+            for cell in row:
+                val = _money(cell)
+                if val is not None and val > 0:
+                    posibles_montos.append(val)
+                    
+        # Asignar el monto mayor encontrado como Total
+        if posibles_montos:
+            tot = max(posibles_montos)
+            obs = "Total inferido (monto máximo encontrado)"
+    # ======================================================================
     
     if iva is None and iva_f == "Sí":
         for ln in text.splitlines():
@@ -281,11 +307,10 @@ def extract(pdf_bytes: bytes, label: str, p0: int, p1: int, det_iva: bool, calc_
             pu = nf[-2] if len(nf) > 2 else nf[-1]
     
     # Lógica de montos
-    obs = ""
     if tot and not sub and not iva and iva_f == "Sí":
         sub = round(tot / 1.16, 2)
         iva = round(tot - sub, 2)
-        obs = "IVA incluido en precio"
+        obs = obs + " | IVA incluido en precio" if obs else "IVA incluido en precio"
     elif tot and iva and not sub: 
         sub = round(tot - iva, 2)
     elif sub and iva and not tot: 
@@ -421,9 +446,10 @@ with st.sidebar:
     cfgs = st.session_state.sec_cfg
     tp = st.session_state.total_pages or 1
     
+    # Agregar 'forzar_ocr' a los diccionarios de configuración
     while len(cfgs) < n:
         i = len(cfgs) + 1
-        cfgs.append({"label": f"Sección {i}", "p0": i, "p1": i, "det_iva": True, "calc_sub": True})
+        cfgs.append({"label": f"Sección {i}", "p0": i, "p1": i, "det_iva": True, "calc_sub": True, "forzar_ocr": False})
     del cfgs[n:]
     
     for i, c in enumerate(cfgs):
@@ -434,6 +460,8 @@ with st.sidebar:
             c["p1"] = b.number_input("Pág. Fin", c["p0"], tp, max(min(c["p1"], tp), c["p0"]), key=f"p1{i}")
             c["det_iva"] = st.checkbox("Detectar IVA", value=c["det_iva"], key=f"iv{i}")
             c["calc_sub"] = st.checkbox("Calcular subtotal si falta", value=c["calc_sub"], key=f"cs{i}")
+            # Nuevo control para activar el OCR manualmente por sección
+            c["forzar_ocr"] = st.checkbox("Forzar OCR (Ignorar texto nativo)", value=c.get("forzar_ocr", False), key=f"fo{i}")
     
     st.markdown("---")
     run = st.button("🔍 Extraer Montos", disabled=(st.session_state.pdf_bytes is None), use_container_width=True, type="primary")
@@ -458,7 +486,7 @@ if run and st.session_state.pdf_bytes:
     for i, c in enumerate(st.session_state.sec_cfg):
         bar.progress((i + .5) / n, text=f"Extrayendo: {c['label']}")
         try:
-            rows.append(extract(st.session_state.pdf_bytes, c["label"], c["p0"], c["p1"], c["det_iva"], c["calc_sub"]))
+            rows.append(extract(st.session_state.pdf_bytes, c["label"], c["p0"], c["p1"], c["det_iva"], c["calc_sub"], c.get("forzar_ocr", False)))
         except Exception as e:
             st.warning(f"⚠️ Sección {i+1}: {str(e)[:80]}")
             rows.append({k: None for k in _COLS} | {
@@ -528,9 +556,14 @@ with R:
             clr = "#1a2744" if lbl != "Diferencia" else ("#c0392b" if abs(dif) > .01 else "#28a745")
             col.markdown(f'<div class="kpi"><div class="v" style="color:{clr}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
         
+        def update_df():
+            # Función de callback para asegurar que los cambios persistan en el estado
+            st.session_state.df = st.session_state.editor_datos
+
         ed = st.data_editor(
             st.session_state.df,
             key="editor_datos",
+            on_change=update_df,
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
@@ -550,6 +583,7 @@ with R:
                 "Observaciones": st.column_config.TextColumn("Observaciones", width="large"),
             },
         )
+        # Asignación de respaldo
         if ed is not None:
             st.session_state.df = ed
         
