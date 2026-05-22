@@ -525,15 +525,30 @@ with R:
             clr = "#1a2744" if lbl != "Diferencia" else ("#c0392b" if abs(dif) > .01 else "#28a745")
             col.markdown(f'<div class="kpi"><div class="v" style="color:{clr}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
         
-        # ==========================================
-        # NUEVO BOTÓN: AUDITORÍA CON IA
+       # ==========================================
+        # NUEVO BOTÓN: AUDITORÍA CON IA (AUTO-DESCUBRIMIENTO)
         # ==========================================
         if st.button("🤖 Auditar montos con IA", type="secondary", use_container_width=True):
             with st.spinner("La IA está revisando matemáticamente el documento..."):
                 try:
                     # Configurar la llave desde los secretos
                     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    model = genai.GenerativeModel('gemini-pro')
+                    
+                    # 1. AUTO-DESCUBRIMIENTO DE MODELOS
+                    modelo_correcto = None
+                    for m in genai.list_models():
+                        if 'generateContent' in m.supported_generation_methods:
+                            if 'flash' in m.name: # Preferimos flash por velocidad
+                                modelo_correcto = m.name
+                                break
+                            if modelo_correcto is None:
+                                modelo_correcto = m.name
+                    
+                    if not modelo_correcto:
+                        st.error("Error: Tu API Key conectó, pero Google no asignó ningún modelo a tu cuenta.")
+                        st.stop()
+                        
+                    model = genai.GenerativeModel(modelo_correcto)
                     
                     # Convertir el dataframe a diccionario para que la IA lo entienda
                     datos_extraidos = st.session_state.df.to_dict(orient="records")
@@ -556,11 +571,12 @@ with R:
                     texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
                     resultado_ia = json.loads(texto_limpio)
                     
-                    st.success("✅ Auditoría completada")
+                    st.success(f"✅ Auditoría completada usando el modelo: {modelo_correcto.replace('models/', '')}")
                     st.info(f"**Veredicto de la IA:** {resultado_ia.get('observacion_general', 'Sin comentarios')}")
                     
                 except Exception as e:
-                    st.error(f"Error al conectar con la IA: Por favor, asegúrate de haber configurado tu API Key en los Secrets de Streamlit. {e}")
+                    st.error(f"Error al conectar con la IA: {e}")
+        # ==========================================
         # ==========================================
         
         def update_df(): st.session_state.df = st.session_state.editor_datos
