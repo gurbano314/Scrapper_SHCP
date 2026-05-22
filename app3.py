@@ -22,7 +22,7 @@ import xlsxwriter
 
 # ── CONFIGURACIÓN DE PÁGINA ──────────────────────────────────
 st.set_page_config(
-    page_title="Extractor de Cotizaciones · EFIDEPORTE",
+    page_title="Extractor de Cotizaciones",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
