@@ -1,44 +1,6 @@
 # ============================================================
 # EXTRACTOR DE COTIZACIONES PDF | app.py  v2.0
 # ============================================================
-# REGISTRO DE CAMBIOS (v1 → v2):
-#
-#  [BF-1] recalc_derived(): "Diferencia final" se recalcula en cada
-#         edición del data_editor (en v1 quedaba congelada al extraer).
-#  [BF-2] _money(): regex corregida — el grupo con $ acepta dígitos
-#         libres ($12345.67); el grupo sin $ exige separador de miles
-#         para no capturar enteros sueltos (pág., cantidades, etc.).
-#  [BF-3] Fallback "valor máximo" solo se usa si ningún otro método
-#         encontró total; además filtra valores < 10 para no confundir
-#         números de página o cantidades con importes.
-#  [BF-4] Gemini: lista de modelos preferidos en orden; elimina la
-#         llamada lenta a list_models() en cada clic del botón.
-#  [BF-5] Triangulación IVA/Subtotal/Total: orden lógico corregido
-#         (no calcula IVA cuando iva_f == "N/M").
-#  [BF-6] Algoritmo valid_line_totals: qty_cand debe ser entero exacto
-#         (q == int(q)) y ≤ 9 999; tolerancia relativa (1%) en lugar
-#         de absoluta fija de 5.0 que causaba falsos positivos.
-#  [BF-7] to_excel — fila de totales: variables s_xl / e_xl nombradas
-#         claramente y documentadas para evitar confusión de índices
-#         0-based vs 1-based.
-#
-#  [OPT-1] OCR condicional: se activa solo cuando el texto nativo
-#          extraído es < NATIVE_MIN_CHARS_PER_PAGE × páginas.
-#  [OPT-2] _render(): recibe pdf_hash (str) en lugar de pdf_bytes como
-#          clave de caché, evitando serialización pesada de bytes.
-#  [OPT-3] KPIs: usa pd.to_numeric(errors="coerce") en lugar de la
-#          cadena _safe_f(df.sum()) que ignoraba errores de tipo.
-#
-#  [UI-1]  Navegación de páginas: botones usan on_click con callbacks
-#          para actualizar session_state ANTES del re-run, eliminando
-#          el desync de una vuelta entre botón e imagen.
-#  [UI-2]  Observaciones: registra el método de extracción real
-#          (OCR / Total por líneas / Total inferido).
-#  [UI-3]  Auditoría IA: muestra tabla de discrepancias estructurada
-#          y maneja JSONDecodeError por separado.
-#  [UI-4]  tp = max(..., 1) en sidebar para evitar ZeroDivisionError
-#          cuando aún no se ha cargado PDF.
-# ============================================================
 
 import hashlib, io, re, datetime, json
 from typing import Optional
