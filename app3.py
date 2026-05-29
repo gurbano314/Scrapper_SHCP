@@ -1,5 +1,5 @@
 # ============================================================
-# CONCILIADOR DE COTIZACIONES PDF — v2.1 (Corrección Total)
+# CONCILIADOR DE COTIZACIONES PDF — v2.2 (Genérico)
 # Streamlit · Compatible Streamlit Cloud + Local
 # ============================================================
 
@@ -166,7 +166,6 @@ def _run_ocr(img_bgr: np.ndarray) -> str:
 # ──────────────────────────────────────────────────────────────
 @st.cache_data(max_entries=200, show_spinner=False)
 def _page_text_hybrid(pdf_bytes: bytes, idx: int) -> tuple[str, bool]:
-    """Force OCR extraction concurrently to guarantee data rescue."""
     native = ""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -176,7 +175,6 @@ def _page_text_hybrid(pdf_bytes: bytes, idx: int) -> tuple[str, bool]:
     ocr_text = ""
     used_ocr = False
     
-    # We forcefully run OCR if native text is weak, or if requested silently
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             if idx < len(doc):
@@ -228,21 +226,18 @@ def extract_section(pdf_bytes: bytes, label: str, p0: int, p1: int, detect_iva: 
     iva_mentioned = detect_iva and bool(_RE_IVA_LINE.search(full_text))
     iva_flag = "Sí" if iva_mentioned else "N/M"
 
-    # Extraction
     total = sub = iva_val = unit_price = None
     qty = 1
 
-    # 1. Busca el total explicitamente filtrando los $2,000,000 de presupuesto global
     total_candidates = []
     for line in full_text.splitlines():
         if _RE_TOTAL.search(line) and not re.search(r"proyecto|presupuest", line, re.I):
             for v in _parse_money(line):
-                if v != 2000000.0:  # Ignora presupuesto proyecto
+                if v != 2000000.0:
                     total_candidates.append(v)
     if total_candidates:
-        total = max(total_candidates) # Toma el valor maximo valido
+        total = max(total_candidates)
 
-    # 2. Busca Subtotal e IVA
     for line in full_text.splitlines():
         low = line.lower()
         if sub is None and _RE_SUBTOTAL.search(low) and "total" not in low.replace("subtotal", ""):
@@ -252,7 +247,6 @@ def extract_section(pdf_bytes: bytes, label: str, p0: int, p1: int, detect_iva: 
             v = _parse_money(line)
             if v: iva_val = v[0]
 
-    # 3. RECONSTRUCCION DE LINEA (El motor que salva la cotización de Santa Úrsula y Desportik)
     valid_lines = []
     seen = set()
     for line in full_text.splitlines():
@@ -261,7 +255,6 @@ def extract_section(pdf_bytes: bytes, label: str, p0: int, p1: int, detect_iva: 
             for total_cand in nums:
                 for pu_cand in nums:
                     for qty_cand in nums:
-                        # Si (Cantidad * PU = Total) con un margen de 5 pesos
                         if total_cand != pu_cand and pu_cand != qty_cand and 1 <= qty_cand <= 50000:
                             if abs((qty_cand * pu_cand) - total_cand) < 5.0:
                                 combo = (int(qty_cand), round(pu_cand, 2), round(total_cand, 2))
@@ -269,17 +262,14 @@ def extract_section(pdf_bytes: bytes, label: str, p0: int, p1: int, detect_iva: 
                                     seen.add(combo)
                                     valid_lines.append((combo[0], combo[1], combo[2]))
 
-    # Si hay lineas válidas y el total falló, usar la sumatoria reconstruida
     if valid_lines:
         if total is None:
             total = sum(item[2] for item in valid_lines)
             obs_parts.append("Total reconstruido por suma de ítems")
-        # Si es un solo producto, heredar PU y Cantidad
         if len(valid_lines) == 1:
             qty = valid_lines[0][0]
             unit_price = valid_lines[0][1]
 
-    # 4. Matemáticas Finales
     if total is not None:
         if iva_included and sub is None and iva_val is None:
             sub = round(total / 1.16, 2)
@@ -349,20 +339,21 @@ def _font(bold=False, theme_white=False, size=11) -> Font:
     return Font(**kwargs)
 def _align(h="general", wrap=False) -> Alignment: return Alignment(horizontal=h, vertical="center", wrap_text=wrap)
 
-def build_excel(df: pd.DataFrame, project_name: str = " ", par_num: int = 9) -> bytes:
+def build_excel(df: pd.DataFrame, project_name: str) -> bytes:
     wb = Workbook()
     ws = wb.active
-    ws.title = f"PAR {str(par_num).zfill(3)}"
+    
+    # Nombre de la hoja limpio y genérico (máximo 31 caracteres para Excel)
+    safe_title = re.sub(r'[\\/*?:\[\]]', '', project_name).strip() or "Conciliación"
+    ws.title = safe_title[:31]
 
     n = len(df)
     D_START = 3; D_END = D_START + n - 1; TOT_ROW = D_END + 1
 
-    c = ws.cell(1, 1, par_num)
-    c.fill = _fill("6E152E"); c.font = _font(bold=True, theme_white=True, size=12); c.alignment = _align("center"); c.number_format = "000"
-    
-    c2 = ws.cell(1, 2, project_name.upper())
-    c2.fill = _fill("6E152E"); c2.font = _font(bold=True, theme_white=True, size=12); c2.alignment = _align("center")
-    ws.merge_cells("B1:M1")
+    # Encabezado principal genérico fusionado a lo largo de toda la tabla
+    c = ws.cell(1, 1, project_name.upper() if project_name else "COTIZACIONES")
+    c.fill = _fill("6E152E"); c.font = _font(bold=True, theme_white=True, size=12); c.alignment = _align("center")
+    ws.merge_cells("A1:M1")
     ws.row_dimensions[1].height = 27.75
 
     headers = ["Fecha", "Rubro", "QT", "T. Cambio ", "(+ IVA)", "Cantidad", "Precio Unitario", "Subtotal (Sin IVA)", " IVA 16%", "Total con IVA", "Diferencia final ", "Monto en Anexo Escrito", "Observaciones"]
@@ -425,7 +416,7 @@ def build_excel(df: pd.DataFrame, project_name: str = " ", par_num: int = 9) -> 
 # ──────────────────────────────────────────────────────────────
 # SESSION STATE & SIDEBAR
 # ──────────────────────────────────────────────────────────────
-_DEFAULTS: dict = {"pdf_bytes": None, "pdf_hash": None, "total_pages": 0, "current_page": 0, "num_sec": 1, "sec_cfg": [], "df": None, "extracted": False, "banxico_token": os.getenv("BANXICO_TOKEN", ""), "project_name": " ", "par_num": 9}
+_DEFAULTS: dict = {"pdf_bytes": None, "pdf_hash": None, "total_pages": 0, "current_page": 0, "num_sec": 1, "sec_cfg": [], "df": None, "extracted": False, "banxico_token": os.getenv("BANXICO_TOKEN", ""), "project_name": ""}
 for _k, _v in _DEFAULTS.items(): st.session_state.setdefault(_k, _v)
 
 with st.sidebar:
@@ -441,8 +432,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### 📁 Proyecto")
-    st.session_state.project_name = st.text_input("Nombre del proyecto", value=st.session_state.project_name, key="inp_pname")
-    st.session_state.par_num = st.number_input("Folio Proyecto", min_value=1, max_value=999, value=st.session_state.par_num, step=1, key="inp_par")
+    st.session_state.project_name = st.text_input("Nombre del proyecto (Opcional)", value=st.session_state.project_name, key="inp_pname")
 
     st.markdown("---")
     st.markdown("### 💱 Tipo de cambio (Banxico)")
@@ -478,7 +468,7 @@ with st.sidebar:
 # ──────────────────────────────────────────────────────────────
 # HEADER & EXTRACTION
 # ──────────────────────────────────────────────────────────────
-st.markdown('<div class="hdr"><h1>📋 Conciliador de Cotizaciones PDF</h1><p>Extrae, edita y exporta montos desde documentos PDF — con tipo de cambio Banxico</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="hdr"><h1>📋 Conciliador de Cotizaciones PDF</h1><p>Extrae, edita y exporta montos desde documentos PDF — de forma general</p></div>', unsafe_allow_html=True)
 
 if btn_extract and st.session_state.pdf_bytes:
     rows: list[dict] = []
@@ -591,10 +581,15 @@ with right_col:
         st.markdown("---")
         col_xls, col_info = st.columns([3, 2])
         try:
-            xlsx_bytes = build_excel(df, project_name=st.session_state.project_name, par_num=st.session_state.par_num)
+            xlsx_bytes = build_excel(df, project_name=st.session_state.project_name)
+            
+            # Nombre de archivo dinámico basado en si introdujeron nombre de proyecto
+            safe_name = re.sub(r'[\\/*?:\[\]\s]', '_', st.session_state.project_name).strip('_')
+            file_prefix = f"Cotizaciones_{safe_name}" if safe_name else "Cotizaciones_Generales"
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            
             col_xls.download_button(
-                "⬇️ Descargar Excel (editable)", data=xlsx_bytes, file_name=f"Cotizaciones_PAR{st.session_state.par_num:03d}_{ts}.xlsx",
+                "⬇️ Descargar Excel (editable)", data=xlsx_bytes, file_name=f"{file_prefix}_{ts}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
             )
             col_info.info("El Excel descargado contiene fórmulas vivas. Puedes editar montos directamente sin volver aquí.")
