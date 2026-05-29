@@ -1,9 +1,9 @@
 # ============================================================
 # EXTRACTOR DE COTIZACIONES PDF | app.py
-# Compatible con Streamlit Community Cloud + OCR Robusto + IA Auditora
+# Compatible con Streamlit Community Cloud + OCR Robusto
 # ============================================================
 
-import hashlib, io, re, os, yaml, pathlib, tempfile, datetime, sys, json
+import hashlib, io, re, os, yaml, pathlib, tempfile, datetime, sys
 from collections import defaultdict
 from typing import Optional
 import fitz
@@ -12,7 +12,6 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 import xlsxwriter
-import google.generativeai as genai
 
 # ─────────────────────────────────────────────────────────────
 # CONFIGURACIÓN DE PÁGINA
@@ -430,26 +429,22 @@ with st.sidebar:
     
     for i, c in enumerate(cfgs):
         with st.expander(f"📄 Sección {i+1}", expanded=(n <= 5)):
-            # Variables y llaves únicas de estado por cada input
             k_lb = f"lb_{i}"
             k_p0 = f"pg0_{i}"
             k_p1 = f"pg1_{i}"
             k_iv = f"iv_{i}"
             k_cs = f"cs_{i}"
             
-            # Inicialización segura en la memoria interna
             if k_lb not in st.session_state: st.session_state[k_lb] = c.get("label", f"Sección {i+1}")
             if k_p0 not in st.session_state: st.session_state[k_p0] = min(c.get("p0", i+1), tp)
             if k_p1 not in st.session_state: st.session_state[k_p1] = max(min(c.get("p1", i+1), tp), st.session_state[k_p0])
             if k_iv not in st.session_state: st.session_state[k_iv] = c.get("det_iva", True)
             if k_cs not in st.session_state: st.session_state[k_cs] = c.get("calc_sub", True)
             
-            # Autocorrección de límites si el usuario sube un PDF más pequeño que el anterior
             if st.session_state[k_p0] > tp: st.session_state[k_p0] = tp
             if st.session_state[k_p1] > tp: st.session_state[k_p1] = tp
             if st.session_state[k_p1] < st.session_state[k_p0]: st.session_state[k_p1] = st.session_state[k_p0]
             
-            # 100% Interactivo: Streamlit ahora controla el estado sin "bloqueos"
             c["label"] = st.text_input("Rubro/Concepto", key=k_lb)
             
             a, b = st.columns(2)
@@ -575,53 +570,6 @@ with R:
             for col, val, lbl in [(k1, ts_, "Total Extraído"), (k2, rs_, "Monto Referencia"), (k3, dif, "Diferencia")]:
                 clr = "#1a2744" if lbl != "Diferencia" else ("#c0392b" if abs(dif) > .01 else "#28a745")
                 col.markdown(f'<div class="kpi"><div class="v" style="color:{clr}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
-        
-        # ==========================================
-        # BOTÓN: AUDITORÍA CON IA (AUTO-DESCUBRIMIENTO)
-        # ==========================================
-        if st.button("🤖 Auditar montos con IA", type="secondary", use_container_width=True):
-            with st.spinner("La IA está revisando matemáticamente el documento..."):
-                try:
-                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    modelo_correcto = None
-                    for m in genai.list_models():
-                        if 'generateContent' in m.supported_generation_methods:
-                            if 'flash' in m.name:
-                                modelo_correcto = m.name
-                                break
-                            if modelo_correcto is None:
-                                modelo_correcto = m.name
-                    
-                    if not modelo_correcto:
-                        st.error("Error: Tu API Key conectó, pero Google no asignó ningún modelo a tu cuenta.")
-                        st.stop()
-                        
-                    model = genai.GenerativeModel(modelo_correcto)
-                    datos_extraidos = st.session_state.df.to_dict(orient="records")
-                    
-                    prompt = f"""
-                    Eres un auditor financiero experto. Revisa estos datos extraídos de una cotización.
-                    Verifica que las matemáticas cuadren perfectamente:
-                    1. ¿Cantidad * Precio Unitario = Subtotal?
-                    2. ¿El IVA 16% es matemáticamente correcto según el subtotal?
-                    3. ¿Subtotal + IVA = Total con IVA?
-                    
-                    Datos: {datos_extraidos}
-                    
-                    Responde EXCLUSIVAMENTE con un JSON válido con esta estructura exacta:
-                    {{"observacion_general": "Tu análisis corto y directo sobre si los montos cuadran matemáticamente o si hay discrepancias"}}
-                    """
-                    
-                    response = model.generate_content(prompt)
-                    texto_limpio = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-                    resultado_ia = json.loads(texto_limpio)
-                    
-                    st.success(f"✅ Auditoría completada usando el modelo: {modelo_correcto.replace('models/', '')}")
-                    st.info(f"**Veredicto de la IA:** {resultado_ia.get('observacion_general', 'Sin comentarios')}")
-                    
-                except Exception as e:
-                    st.error(f"Error al conectar con la IA: {e}")
-        # ==========================================
         
         st.markdown("---")
         try:
