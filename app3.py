@@ -44,7 +44,7 @@ from openpyxl.utils import get_column_letter
 # CONFIGURACIÓN DE PÁGINA
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Conciliador de Cotizaciones · EFIDEPORTE",
+    page_title="Conciliador de Cotizaciones",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -848,8 +848,7 @@ with st.sidebar:
     st.session_state.proyecto_nombre = st.text_input(
         "Nombre del proyecto",
         value=st.session_state.proyecto_nombre,
-        placeholder="Ej. VELOCIDAD ACTIVA",
-    )
+          )
 
     st.markdown("---")
     st.markdown("### 💱 Banxico – Tipo de Cambio")
@@ -924,8 +923,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hdr">
-  <h1>📋 Conciliador de Cotizaciones · EFIDEPORTE</h1>
-  <p>Extracción automática PDF · OCR adaptativo · Tipo de cambio Banxico · Plantilla Excel PAR</p>
+  <h1>📋 Conciliador de Cotizaciones</h1>
+  <p>Extracción automática PDF · OCR adaptativo · Tipo de cambio Banxico </p>
 </div>
 """, unsafe_allow_html=True)
 
