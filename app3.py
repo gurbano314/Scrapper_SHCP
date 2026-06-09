@@ -1,31 +1,48 @@
 # ============================================================
-# CONCILIADOR DE COTIZACIONES PDF — v2.2 (Genérico)
-# Streamlit · Compatible Streamlit Cloud + Local
+# CONCILIADOR DE COTIZACIONES PDF  |  app.py  v3.0
+# Luis Gustavo Urbano Jiménez · SHCP / EFIDEPORTE
+# ============================================================
+# Correcciones sobre v2.1:
+#   F1  — Race condition data_editor: detección real de cambios via hash
+#   F2  — Navegación: una sola fuente de verdad (on_click con args)
+#   F3  — Caché de render: pdf_bytes fuera de la firma → sin fuga de memoria
+#   F4  — OCR con timeout + ThreadPoolExecutor
+#   F5  — Regex grupo 3: solo captura números con decimales .XX
+#   F6  — Fórmulas Excel siempre escritas (nunca sobreescritas por valores)
+#   F7  — Guard explícito sobre df_cur antes de KPIs
+#   F8  — Triangulación IVA protegida con cota de cordura
+#   F9  — cache_resource con max_entries=1
+#   F10 — Parser JSON de IA robusto con re.search()
+#   F11 — Fila de totales Excel: rango s_xl..e_xl siempre < tot_row
+# Nuevas funciones:
+#   ● API Banxico SIE: tipo de cambio USD/EUR/CAD por fecha de cotización
+#   ● Plantilla Excel fiel al formato PAR (fila 1 burdeos, fórmulas en H/I/J/K)
+#   ● Opción "plantilla vacía" para edición manual directa en Excel
+#   ● Moneda por sección + conversión automática a MXN al exportar
 # ============================================================
 
-from __future__ import annotations
-
+import concurrent.futures
+import contextlib
 import datetime
 import hashlib
 import io
-import math
+import json
 import re
-import os
-import requests
 from typing import Optional
 
-import fitz                    # PyMuPDF
+import fitz
 import numpy as np
+import openpyxl
 import pandas as pd
 import pdfplumber
+import requests
 import streamlit as st
-from openpyxl import Workbook
-from openpyxl.styles import (Alignment, Border, Font, PatternFill, Side)
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-# ──────────────────────────────────────────────────────────────
-# PAGE CONFIG
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# CONFIGURACIÓN DE PÁGINA
+# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Conciliador de Cotizaciones",
     page_icon="📋",
@@ -35,562 +52,1107 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { background: #1a2744; }
-[data-testid="stSidebar"] * { color: #e8e8e8 !important; }
-.hdr { background: linear-gradient(90deg,#1a2744,#2d4a8f);
-       padding: 14px 22px; border-radius: 8px; margin-bottom: 18px; }
-.hdr h1 { color: #fff; font-size: 1.4rem; margin: 0; font-weight: 700; }
-.hdr p  { color: #a8c0ff; font-size: .87rem; margin: 4px 0 0; }
-.ptitle { background: #2d4a8f; color: #fff !important; font-weight: 700;
-          font-size: .88rem; padding: 7px 14px; border-radius: 6px 6px 0 0; margin-bottom: 4px; }
-.kpi  { background: #f0f4ff; border: 1px solid #c5d3f5;
-        border-radius: 8px; padding: 10px 12px; text-align: center; margin-bottom: 6px; }
-.kpi .v { font-size: 1.2rem; font-weight: 700; color: #1a2744; }
-.kpi .l { font-size: .72rem; color: #5566aa; }
-.tc-box { background: #e8f4fd; border: 1px solid #90caf9; border-radius: 6px;
-          padding: 8px 12px; font-size: .85rem; margin-top: 4px; }
+[data-testid="stSidebar"] { background:#6E152E; }
+[data-testid="stSidebar"] * { color:#f0e0e6 !important; }
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] select,
+[data-testid="stSidebar"] textarea { color:#111 !important; }
+.hdr {
+    background:linear-gradient(90deg,#6E152E,#a02048);
+    padding:14px 22px; border-radius:8px; margin-bottom:18px;
+}
+.hdr h1 { color:#fff; font-size:1.4rem; margin:0; font-weight:700; }
+.hdr p  { color:#f8ccd6; font-size:.87rem; margin:4px 0 0; }
+.ptitle {
+    background:#6E152E; color:#fff !important; font-weight:700;
+    font-size:.88rem; padding:7px 14px; border-radius:6px 6px 0 0; margin-bottom:4px;
+}
+.kpi { background:#fdf5f7; border:1px solid #e8b4c0;
+       border-radius:8px; padding:10px 12px; text-align:center; margin-bottom:6px; }
+.kpi .v { font-size:1.2rem; font-weight:700; color:#6E152E; }
+.kpi .l { font-size:.72rem; color:#9a4060; }
+.tag-moneda {
+    background:#6E152E; color:#fff !important; padding:2px 8px;
+    border-radius:4px; font-size:.78rem; font-weight:600;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────
-# CONSTANTS
-# ──────────────────────────────────────────────────────────────
-COLS = [
+
+# ─────────────────────────────────────────────────────────────
+# CONSTANTES
+# ─────────────────────────────────────────────────────────────
+NATIVE_MIN_CHARS_PER_PAGE = 80
+OCR_TIMEOUT_S             = 25
+MAX_PLAUSIBLE_MXN         = 50_000_000          # $50 MDP – cota de cordura (F8)
+
+# Banxico SIE – series de tipo de cambio FIX
+_BANXICO_SERIES = {
+    "USD": "SF43718",
+    "EUR": "SF46410",
+    "CAD": "SF60653",
+}
+_BANXICO_URL = "https://www.banxico.org.mx/SieAPIRest/service/v1"
+
+# Columnas del modelo de datos (= plantilla Excel)
+_COLS = [
     "Fecha", "Rubro", "QT", "T. Cambio", "(+ IVA)", "Cantidad",
     "Precio Unitario", "Subtotal (Sin IVA)", "IVA 16%", "Total con IVA",
     "Diferencia final", "Monto en Anexo Escrito", "Observaciones",
 ]
+_WIDTHS_COL = [12, 52, 5, 10, 7, 8, 16, 18, 17, 16, 18, 22, 48]
 
-COL_WIDTHS = [12, 51.7, 5.4, 10.3, 7.7, 6, 16.9, 18.6, 17.4, 16.4, 18, 22, 48.4]
-MONEY_FMT  = '_-"$ "* #,##0.00_-;\\-"$ "* #,##0.00_-;_-"$ "* "-"??_-;_-@_-'
-DATE_FMT   = "mm-dd-yy"
-
-BANXICO_SERIES: dict[str, str] = {
-    "USD": "SF43718", "EUR": "SF46410", "CAD": "SF57771",
-    "GBP": "SF46406", "JPY": "SF46407", "CHF": "SF46408",
-}
-
-_MESES: dict[str, int] = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
-    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12,
-}
-
-_RE_MONEY = re.compile(
-    r"\$?\s*([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?)"
-    r"|(?<!\d)([\d]{1,3}(?:,\d{3})+(?:\.\d{0,2})?)"
+# F5 CORREGIDO: grupo 3 exige decimales .XX → no captura folios/teléfonos
+_MONEY_RE = re.compile(
+    r"\$\s*([\d,]+(?:\.\d{1,2})?)"                      # con signo $
+    r"|(?<!\d)([\d]{1,3}(?:,\d{3})+(?:\.\d{1,2})?)"    # con separador de miles
+    r"|(?<!\d)(\d{1,9}\.\d{2})(?!\d)"                   # solo si tiene .XX
 )
-
-_RE_DATE = re.compile(
-    r"(\d{1,2})\s*(?:de\s+)?([a-záéíóúüñ]{3,})\s*(?:de(?:l)?\s+)?(\d{4})"
-    r"|(\d{4})[\-\/\.](\d{1,2})[\-\/\.](\d{1,2})"
-    r"|(\d{1,2})[\-\/\.](\d{1,2})[\-\/\.](\d{2,4})",
+# Palabras que dan contexto monetario a una línea
+_MONETARY_CTX = re.compile(
+    r"total|importe|monto|precio|valor|costo|cobro|cargo|pago"
+    r"|subtotal|honorarios|tarifa|renta|fianza",
     re.IGNORECASE,
 )
+_DATE_RE = re.compile(
+    r"(\d{1,2})\s*(?:de)?\s*([a-záéíóúñA-ZÁÉÍÓÚÑ]+)[,\s]*(?:del?\s*)?(\d{4})"
+    r"|(\d{4})[\s.\-/]+(\d{1,2})[\s.\-/]+(\d{1,2})"
+    r"|(\d{1,2})[\s.\-/]+(\d{1,2})[\s.\-/]+(\d{2,4})"
+)
+_ITEM_RE = re.compile(
+    r"^\d+\s+(\d+)\s+\w+\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$"
+)
+# Fix Dorama: detecta precio directo "es de $X" antes del fallback máximo
+_ES_DE_RE = re.compile(
+    r"es\s+de\s+\$?\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE
+)
+# Fix Dorama: excluye líneas que mencionan el presupuesto total del proyecto
+_BUDGET_EXCL = re.compile(
+    r"presupuestal|presupuesto\s+total", re.IGNORECASE
+)
+_MESES = {
+    "enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+    "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12,
+    "ene":1,"feb":2,"mar":3,"abr":4,"may":5,"jun":6,
+    "jul":7,"ago":8,"sep":9,"oct":10,"nov":11,"dic":12,
+}
 
-_RE_TOTAL = re.compile(r"\b(total|importe\s+total|gran\s+total)\b", re.IGNORECASE)
-_RE_SUBTOTAL  = re.compile(r"\b(subtotal|sub[\s\-]?total|sin\s+iva|importe)\b", re.IGNORECASE)
-_RE_IVA_LINE  = re.compile(r"\biva\b|\b16\s*%|impuesto\s+al\s+valor\s+agregado", re.IGNORECASE)
-_RE_IVA_INC   = re.compile(r"(?:precios?|tarifas?|montos?).*inclu(?:ye[ns]?|ido[s]?).*iva|iva\s+inclu(?:ido|ye)", re.IGNORECASE)
+# Formato numérico de dinero (idéntico al de la plantilla)
+_FMT_MONEY = '_-"$ "* #,##0.00_-;\\-"$ "* #,##0.00_-;_-"$ "* "-"??_-;_-@_-'
+_FMT_DATE  = "mm-dd-yy"
 
-# ──────────────────────────────────────────────────────────────
-# HELPERS
-# ──────────────────────────────────────────────────────────────
-def _md5(b: bytes) -> str: return hashlib.md5(b).hexdigest()
 
-def _f(v) -> Optional[float]:
-    if v is None: return None
+# ─────────────────────────────────────────────────────────────
+# SESSION STATE
+# ─────────────────────────────────────────────────────────────
+_SS_DEFAULTS: dict = {
+    "pdf_bytes":      None,
+    "pdf_hash":       None,
+    "total_pages":    0,
+    "current_page":   0,
+    "num_sec":        1,
+    "sec_cfg":        [],
+    "df":             None,
+    "df_hash":        "",          # F1: hash del df para detectar cambios reales
+    "extracted":      False,
+    "bx_cache":       {},          # {(moneda, fecha_iso): float}
+    "proyecto_num":   "",
+    "proyecto_nombre":"",
+}
+for _k, _v in _SS_DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS GENERALES
+# ─────────────────────────────────────────────────────────────
+def _md5(b: bytes) -> str:
+    return hashlib.md5(b).hexdigest()
+
+
+def _df_hash(df: pd.DataFrame) -> str:
+    """Hash rápido del contenido del DataFrame (F1: detecta cambios reales)."""
     try:
-        x = float(str(v).replace(",", "").strip())
-        return None if (math.isnan(x) or math.isinf(x)) else x
-    except (ValueError, TypeError): return None
+        return hashlib.md5(
+            pd.util.hash_pandas_object(df, index=False).values.tobytes()
+        ).hexdigest()
+    except Exception:
+        return hashlib.md5(df.to_csv(index=False).encode()).hexdigest()
 
-def _parse_money(text: str) -> list[float]:
-    out: list[float] = []
-    for m in _RE_MONEY.finditer(str(text)):
-        raw = m.group(1) or m.group(2)
+
+def _safe_f(v) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        f = float(str(v).replace(",", "").strip())
+        return None if f != f else f    # NaN check
+    except (ValueError, TypeError):
+        return None
+
+
+def _money(txt: str, need_ctx: bool = False) -> Optional[float]:
+    """Extrae el primer importe válido del texto. F5: grupo 3 solo con .XX"""
+    if need_ctx and not _MONETARY_CTX.search(str(txt)):
+        return None
+    for m in _MONEY_RE.finditer(str(txt)):
+        raw = m.group(1) or m.group(2) or m.group(3)
         if raw:
             try:
                 v = float(raw.replace(",", ""))
-                if v > 0: out.append(v)
-            except ValueError: pass
-    return sorted(set(out), reverse=True)
+                if v > 0:
+                    return v
+            except ValueError:
+                continue
+    return None
 
-def _parse_date(text: str) -> Optional[datetime.date]:
-    for m in _RE_DATE.finditer(text.lower()):
+
+def _date(text: str) -> Optional[datetime.date]:
+    for m in _DATE_RE.finditer(text.lower()):
         g = m.groups()
         try:
             if g[0]:
-                mes = _resolve_month(g[1].strip())
-                if mes: return datetime.date(int(g[2]), mes, int(g[0]))
-            elif g[3]: return datetime.date(int(g[3]), int(g[4]), int(g[5]))
-            elif g[6]:
+                mes_str = g[1].lower().strip()
+                mes_num = _MESES.get(mes_str) or _MESES.get(mes_str[:3])
+                if not mes_num:
+                    for k, v in _MESES.items():
+                        if mes_str.startswith(k[:3]):
+                            mes_num = v
+                            break
+                if mes_num:
+                    return datetime.date(int(g[2]), mes_num, int(g[0]))
+            if g[3]:
+                return datetime.date(int(g[3]), int(g[4]), int(g[5]))
+            if g[6]:
                 yr = int(g[8])
                 return datetime.date(yr + 2000 if yr < 100 else yr, int(g[7]), int(g[6]))
-        except (ValueError, TypeError): pass
+        except (ValueError, KeyError):
+            continue
     return None
 
-def _resolve_month(s: str) -> Optional[int]:
-    s = s.lower().strip()
-    if s in _MESES: return _MESES[s]
-    for k, v in _MESES.items():
-        if len(s) >= 3 and (s.startswith(k[:3]) or k.startswith(s[:3])): return v
-    return None
 
-# ──────────────────────────────────────────────────────────────
-# OCR ENGINE
-# ──────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner=False)
-def _ocr_engine():
+# ─────────────────────────────────────────────────────────────
+# OCR  (F4: timeout · F9: max_entries=1)
+# ─────────────────────────────────────────────────────────────
+@st.cache_resource(show_spinner=False, max_entries=1)   # F9
+def _get_ocr():
     try:
         from rapidocr_onnxruntime import RapidOCR
-        engine = RapidOCR(det_model_dir=None, rec_model_dir=None, cls_model_dir=None)
-        return "rapidocr", engine
-    except Exception as e:
-        st.error(f"⚠️ Error cargando motor OCR: {str(e)}")
-        return None, None
+        return RapidOCR(det_model_dir=None, rec_model_dir=None, cls_model_dir=None)
+    except Exception as exc:
+        st.warning(f"RapidOCR no disponible ({exc}). OCR desactivado.")
+        return None
 
-def _run_ocr(img_bgr: np.ndarray) -> str:
-    name, engine = _ocr_engine()
-    if name is None: return ""
-    try:
-        if name == "rapidocr":
-            result, _ = engine(img_bgr)
-            return "\n".join(r[1] for r in (result or []) if r and len(r) > 1)
-    except Exception as e:
-        st.warning(f"⚠️ Error visual: {str(e)}")
-    return ""
 
-# ──────────────────────────────────────────────────────────────
-# PDF EXTRACTION
-# ──────────────────────────────────────────────────────────────
-@st.cache_data(max_entries=200, show_spinner=False)
-def _page_text_hybrid(pdf_bytes: bytes, idx: int) -> tuple[str, bool]:
-    native = ""
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            if idx < len(pdf.pages): native = pdf.pages[idx].extract_text() or ""
-    except Exception: pass
+def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
+    """Extrae texto de una página imagen con timeout (F4)."""
+    ocr = _get_ocr()
+    if ocr is None:
+        return ""
 
-    ocr_text = ""
-    used_ocr = False
-    
-    try:
+    def _run() -> str:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            if idx < len(doc):
-                pix = doc[idx].get_pixmap(matrix=fitz.Matrix(2.0, 2.0), colorspace=fitz.csRGB, alpha=False)
-                img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:, :, ::-1]
-                ocr_text = _run_ocr(img)
-                if len(ocr_text) > 30: used_ocr = True
-    except Exception: pass
+            pix = doc[idx].get_pixmap(
+                matrix=fitz.Matrix(1.5, 1.5), colorspace=fitz.csRGB, alpha=False
+            )
+            img = np.frombuffer(pix.samples, np.uint8).reshape(
+                pix.height, pix.width, 3
+            )[:, :, ::-1]
+            result, _ = ocr(img)
+            return "\n".join(r[1] for r in result if r and len(r) > 1) if result else ""
 
-    return (native + "\n" + ocr_text).strip(), used_ocr
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        fut = ex.submit(_run)
+        try:
+            return fut.result(timeout=OCR_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            st.warning(f"⏱ OCR pág. {idx + 1} excedió {OCR_TIMEOUT_S}s — omitida.")
+            return ""
+        except Exception as exc:
+            st.warning(f"OCR pág. {idx + 1}: {exc}")
+            return ""
 
-@st.cache_data(max_entries=200, show_spinner=False)
-def _page_tables(pdf_bytes: bytes, idx: int) -> list[list[list[str]]]:
-    out: list[list[list[str]]] = []
-    try:
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            if idx < len(pdf.pages):
-                for tbl in pdf.pages[idx].extract_tables() or []:
-                    cleaned = [[str(c or "").strip() for c in row] for row in tbl if row]
-                    if cleaned: out.append(cleaned)
-    except Exception: pass
-    return out
 
-@st.cache_data(max_entries=50, show_spinner=False)
-def _render_png(pdf_bytes: bytes, idx: int) -> bytes:
+# ─────────────────────────────────────────────────────────────
+# VISOR  (F3: pdf_bytes fuera de la firma de caché)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(max_entries=120, show_spinner=False)
+def _render(pdf_hash: str, idx: int) -> bytes:          # F3: clave = (hash, idx)
+    pdf_bytes = st.session_state.pdf_bytes              # bytes en runtime, no en clave
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-        pix = doc[idx].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), colorspace=fitz.csRGB, alpha=False)
+        pix = doc[idx].get_pixmap(
+            matrix=fitz.Matrix(1.5, 1.5), colorspace=fitz.csRGB, alpha=False
+        )
         return pix.tobytes("png")
 
-# ──────────────────────────────────────────────────────────────
-# EXTRACTION LOGIC
-# ──────────────────────────────────────────────────────────────
-def extract_section(pdf_bytes: bytes, label: str, p0: int, p1: int, detect_iva: bool, calc_sub: bool) -> dict:
-    full_text = ""
-    all_tables: list[list[list[str]]] = []
-    used_ocr = False
 
-    for idx in range(p0 - 1, p1):
-        txt, ocr_flag = _page_text_hybrid(pdf_bytes, idx)
-        full_text += "\n" + txt
-        if ocr_flag: used_ocr = True
-        all_tables.extend(_page_tables(pdf_bytes, idx))
+# ─────────────────────────────────────────────────────────────
+# API BANXICO SIE
+# ─────────────────────────────────────────────────────────────
+def _banxico_tc(moneda: str, fecha: datetime.date, token: str) -> Optional[float]:
+    """
+    Devuelve el tipo de cambio Fix (MXN por unidad) para `moneda` en `fecha`.
+    Busca en un rango de 5 días para cubrir fines de semana y festivos.
+    Usa caché de sesión para no repetir llamadas.
+    """
+    if moneda not in _BANXICO_SERIES or not token:
+        return None
 
-    obs_parts: list[str] = []
-    if used_ocr: obs_parts.append("OCR aplicado")
+    cache_key = (moneda, fecha.isoformat())
+    if cache_key in st.session_state.bx_cache:
+        return st.session_state.bx_cache[cache_key]
 
-    fecha = _parse_date(full_text) or datetime.date.today()
-    iva_included = bool(_RE_IVA_INC.search(full_text))
-    iva_mentioned = detect_iva and bool(_RE_IVA_LINE.search(full_text))
-    iva_flag = "Sí" if iva_mentioned else "N/M"
+    serie   = _BANXICO_SERIES[moneda]
+    f_ini   = (fecha - datetime.timedelta(days=5)).isoformat()
+    f_fin   = fecha.isoformat()
+    url     = f"{_BANXICO_URL}/series/{serie}/datos/{f_ini}/{f_fin}"
+    headers = {"Bmx-Token": token, "Accept": "application/json"}
 
-    total = sub = iva_val = unit_price = None
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        datos = resp.json()["bmx"]["series"][0]["datos"]
+        if not datos:
+            return None
+        # Tomar el último dato disponible (el más cercano a la fecha solicitada)
+        tc = float(datos[-1]["dato"].replace(",", ""))
+        st.session_state.bx_cache[cache_key] = tc
+        return tc
+    except Exception as exc:
+        st.warning(f"Banxico ({moneda} · {fecha}): {exc}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────
+# RECALCULAR DIFERENCIA FINAL
+# ─────────────────────────────────────────────────────────────
+def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
+    df  = df.copy()
+    tot = pd.to_numeric(df["Total con IVA"],          errors="coerce")
+    anx = pd.to_numeric(df["Monto en Anexo Escrito"], errors="coerce")
+    mask = tot.notna() | anx.notna()
+    df.loc[mask,  "Diferencia final"] = (tot.fillna(0) - anx.fillna(0))[mask]
+    df.loc[~mask, "Diferencia final"] = None
+    return df
+
+
+# ─────────────────────────────────────────────────────────────
+# MOTOR DE EXTRACCIÓN  (F5, F8 corregidos)
+# ─────────────────────────────────────────────────────────────
+def _parse_space_table(text: str) -> list[dict]:
+    items = []
+    for line in text.splitlines():
+        m = _ITEM_RE.match(line.strip())
+        if m:
+            qty, desc, pu, total = m.groups()
+            items.append({
+                "qty": int(qty), "desc": desc.strip(),
+                "pu": float(pu.replace(",", "")),
+                "total": float(total.replace(",", "")),
+            })
+    return items
+
+
+def extract(
+    pdf_bytes: bytes,
+    label: str,
+    p0: int,
+    p1: int,
+    det_iva: bool,
+    calc_sub: bool,
+    moneda: str = "MXN",
+    bx_token: str = "",
+) -> dict:
+    """
+    Extrae datos financieros de las páginas p0..p1 del PDF.
+    Si moneda != MXN y se dispone de token Banxico, convierte a MXN.
+    Devuelve un dict con todas las columnas de _COLS + '_tc' para uso interno.
+    """
+    native_text = ""
+    table_rows: list[list[str]] = []
+    ocr_used = False
+
+    # ── Nivel 1 y 2: texto nativo + tablas ───────────────────
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        n_pages = len(pdf.pages)
+        pr = range(max(0, p0 - 1), min(p1, n_pages))
+        for i in pr:
+            pg  = pdf.pages[i]
+            txt = pg.extract_text() or ""
+            native_text += "\n" + txt
+            for tbl in (pg.extract_tables() or []):
+                if tbl:
+                    table_rows.extend(
+                        [str(c or "").strip() for c in row] for row in tbl if row
+                    )
+            for item in _parse_space_table(txt):
+                table_rows.append([
+                    str(item["qty"]), item["desc"],
+                    f"${item['pu']:,.2f}", f"${item['total']:,.2f}",
+                ])
+
+    # ── Nivel 3: OCR condicional ──────────────────────────────
+    pages_count = max(len(pr), 1)
+    if len(native_text.strip()) < NATIVE_MIN_CHARS_PER_PAGE * pages_count:
+        ocr_used = True
+        for i in pr:
+            o_txt = _ocr_page(pdf_bytes, i)
+            if o_txt:
+                native_text += "\n" + o_txt
+                for item in _parse_space_table(o_txt):
+                    table_rows.append([
+                        str(item["qty"]), item["desc"],
+                        f"${item['pu']:,.2f}", f"${item['total']:,.2f}",
+                    ])
+
+    text = native_text
+    tlow = text.lower()
+    iva_f = "Sí" if det_iva and re.search(r"\biva\b|16%|vat", tlow) else "N/M"
+
+    tot = iva = sub = pu = fecha = None
     qty = 1
+    obs_parts: list[str] = []
+    if ocr_used:
+        obs_parts.append("OCR")
 
-    total_candidates = []
-    for line in full_text.splitlines():
-        if _RE_TOTAL.search(line) and not re.search(r"proyecto|presupuest", line, re.I):
-            for v in _parse_money(line):
-                if v != 2000000.0:
-                    total_candidates.append(v)
-    if total_candidates:
-        total = max(total_candidates)
+    # ── Paso 1: tablas estructuradas ──────────────────────────
+    for row in table_rows:
+        j = "   ".join(row).lower()
+        s = "   ".join(row)
+        if re.search(r"\btotal\b", j) and not re.search(r"sub|parcial|acum", j):
+            v = _money(s)
+            if v and (tot is None or v > tot):
+                tot = v
+        if re.search(r"\biva\b|16%|vat", j):
+            v = _money(s)
+            if v and (iva is None or v > iva):
+                iva = v
+        if re.search(r"subtotal|sin\s*iva|importe\s*neto", j):
+            v = _money(s)
+            if v and (sub is None or v > sub):
+                sub = v
 
-    for line in full_text.splitlines():
-        low = line.lower()
-        if sub is None and _RE_SUBTOTAL.search(low) and "total" not in low.replace("subtotal", ""):
-            v = _parse_money(line)
-            if v: sub = v[0]
-        if iva_val is None and _RE_IVA_LINE.search(low) and not _RE_TOTAL.search(low):
-            v = _parse_money(line)
-            if v: iva_val = v[0]
+    # ── Paso 2: reconstrucción cantidad × precio unitario ─────
+    valid_line_totals: list[float] = []
+    seen: set[tuple] = set()
+    for row in table_rows:
+        row_str = " ".join(str(c) for c in row)
+        nums: list[float] = []
+        for token in re.findall(r"[\d,]+(?:\.\d+)?", row_str):
+            n = _safe_f(token.replace(",", ""))
+            if n is not None and n > 0:
+                nums.append(n)
+        if len(nums) < 2:
+            continue
+        found = False
+        for i_t, t_cand in enumerate(nums):
+            if t_cand < 1.0 or found:
+                continue
+            for i_p, p_cand in enumerate(nums):
+                if i_p == i_t or p_cand <= 0 or found:
+                    continue
+                for i_q, q_cand in enumerate(nums):
+                    if i_q in (i_t, i_p):
+                        continue
+                    if not (1 <= q_cand <= 9999 and q_cand == int(q_cand)):
+                        continue
+                    tol = max(0.5, t_cand * 0.01)
+                    if abs(q_cand * p_cand - t_cand) <= tol:
+                        key = (int(q_cand), round(p_cand, 2), round(t_cand, 2))
+                        if key not in seen:
+                            seen.add(key)
+                            valid_line_totals.append(t_cand)
+                        found = True
+                        break
+                if found:
+                    break
 
-    valid_lines = []
-    seen = set()
-    for line in full_text.splitlines():
-        nums = _parse_money(line)
-        if len(nums) >= 2:
-            for total_cand in nums:
-                for pu_cand in nums:
-                    for qty_cand in nums:
-                        if total_cand != pu_cand and pu_cand != qty_cand and 1 <= qty_cand <= 50000:
-                            if abs((qty_cand * pu_cand) - total_cand) < 5.0:
-                                combo = (int(qty_cand), round(pu_cand, 2), round(total_cand, 2))
-                                if combo not in seen:
-                                    seen.add(combo)
-                                    valid_lines.append((combo[0], combo[1], combo[2]))
+    if tot is None and valid_line_totals:
+        tot = round(sum(valid_line_totals), 2)
+        obs_parts.append("Total por líneas")
 
-    if valid_lines:
-        if total is None:
-            total = sum(item[2] for item in valid_lines)
-            obs_parts.append("Total reconstruido por suma de ítems")
-        if len(valid_lines) == 1:
-            qty = valid_lines[0][0]
-            unit_price = valid_lines[0][1]
+    # ── Paso 3: fecha y total por texto libre ─────────────────
+    for ln in text.splitlines():
+        if fecha is None:
+            d = _date(ln)
+            if d:
+                fecha = d
 
-    if total is not None:
-        if iva_included and sub is None and iva_val is None:
-            sub = round(total / 1.16, 2)
-            iva_val = round(total - sub, 2)
-            obs_parts.append("IVA incluido → subtotal calculado")
-        elif sub is not None and iva_val is None and iva_mentioned:
-            iva_val = round(sub * 0.16, 2)
-        elif sub is not None and iva_val is not None and total is None:
-            total = round(sub + iva_val, 2)
-    elif sub is not None and calc_sub and iva_mentioned:
-        iva_val = round(sub * 0.16, 2)
-        total = round(sub + iva_val, 2)
-        obs_parts.append("Total deducido desde subtotal")
+    if tot is None:
+        for ln in text.splitlines():
+            if re.search(r"\btotal\b", ln, re.I) and not re.search(r"sub|parcial|acum", ln, re.I):
+                v = _money(ln)
+                if v and (tot is None or v > tot):
+                    tot = v
 
-    if unit_price is None and sub is not None:
-        unit_price = round(sub / qty, 2)
+    # ── Paso 3.5: precio directo "es de $X" ──────────────────────
+    # Cubre fianzas, honorarios y servicios expresados en prosa sin
+    # etiqueta "Total" explícita (p. ej. Dorama: "...es de $31,520.00").
+    if tot is None:
+        for ln in text.splitlines():
+            m_ed = _ES_DE_RE.search(ln)
+            if m_ed:
+                v = _safe_f(m_ed.group(1).replace(",", ""))
+                if v and 10.0 <= v <= MAX_PLAUSIBLE_MXN:
+                    tot = v
+                    obs_parts.append("Precio directo")
+                    break
+
+    # ── Fallback: máximo con contexto monetario (F5 corregido) ─
+    # Excluye líneas de presupuesto del proyecto (_BUDGET_EXCL).
+    if tot is None:
+        all_vals: list[float] = []
+        for ln in text.splitlines():
+            if _BUDGET_EXCL.search(ln):
+                continue
+            if not _MONETARY_CTX.search(ln):
+                continue
+            for m in _MONEY_RE.finditer(ln):
+                raw = m.group(1) or m.group(2) or m.group(3)
+                if raw:
+                    try:
+                        v = float(raw.replace(",", ""))
+                        if 10.0 <= v <= MAX_PLAUSIBLE_MXN:
+                            all_vals.append(v)
+                    except ValueError:
+                        pass
+        if all_vals:
+            tot = max(all_vals)
+            obs_parts.append("Total inferido (máx.)")
+
+    # F8: cota de cordura – valores absurdos (folios, teléfonos)
+    if tot is not None and tot > MAX_PLAUSIBLE_MXN:
+        obs_parts.append(f"⚠ Valor sospechoso ({tot:,.2f}) — verificar")
+        tot = None
+
+    # ── Subtotal e IVA por texto libre ────────────────────────
+    if sub is None:
+        for ln in text.splitlines():
+            if re.search(r"subtotal|importe|sin\s*iva", ln, re.I) and \
+               not re.search(r"\btotal\b", ln.replace("subtotal", ""), re.I):
+                v = _money(ln)
+                if v and (tot is None or v <= tot):
+                    sub = v
+                    break
+
+    if iva is None and iva_f == "Sí":
+        for ln in text.splitlines():
+            if re.search(r"\biva\b|16%|vat|impuesto", ln, re.I):
+                v = _money(ln)
+                if v and (tot is None or v < tot):
+                    iva = v
+                    break
+
+    # ── Cantidad y precio unitario ────────────────────────────
+    for row in table_rows:
+        row_str = " ".join(str(c) for c in row)
+        nums_: list[float] = []
+        for t in re.findall(r"[\d,]+(?:\.\d+)?", row_str):
+            try:
+                nums_.append(float(t.replace(",", "")))
+            except ValueError:
+                pass
+        if len(nums_) >= 2 and 1 <= nums_[0] <= 9999:
+            qty = int(nums_[0])
+            pu  = nums_[-2] if len(nums_) > 2 else nums_[-1]
+
+    # ── Triangulación IVA / Subtotal / Total (F8: protegida) ─
+    if tot and not sub and not iva and iva_f == "Sí":
+        sub = round(tot / 1.16, 2)
+        iva = round(tot - sub, 2)
+        obs_parts.append("IVA desglosado")
+    elif tot and iva and not sub:
+        sub = round(tot - iva, 2)
+    elif sub and iva and not tot:
+        tot = round(sub + iva, 2)
+    elif calc_sub and sub and not iva and not tot and iva_f == "Sí":
+        iva = round(sub * 0.16, 2)
+        tot = round(sub + iva, 2)
+
+    if pu is None and sub is not None and qty:
+        pu = round(sub / qty, 2)
+
+    # ── Conversión de moneda con Banxico ─────────────────────
+    tc: Optional[float] = None
+    if moneda != "MXN" and bx_token:
+        fecha_tc = fecha or datetime.date.today()
+        tc = _banxico_tc(moneda, fecha_tc, bx_token)
+        if tc and tot is not None:
+            tot_orig = tot
+            tot = round(tot * tc, 2)
+            sub = round(sub * tc, 2) if sub else None
+            iva = round(iva * tc, 2) if iva else None
+            pu  = round(pu  * tc, 2) if pu  else None
+            obs_parts.append(f"1 {moneda} = ${tc:.4f} MXN")
+            obs_parts.append(f"Total orig.: {moneda} {tot_orig:,.2f}")
+
+    tc_display = f"{moneda} ({tc:.4f})" if tc else moneda
 
     return {
-        "Fecha":              fecha.isoformat(),
-        "Rubro":              label,
-        "QT":                 "Sí",
-        "T. Cambio":          "MXN",
-        "(+ IVA)":            iva_flag,
-        "Cantidad":           qty,
-        "Precio Unitario":    unit_price,
-        "Subtotal (Sin IVA)": sub,
-        "IVA 16%":            iva_val,
-        "Total con IVA":      total,
-        "Diferencia final":   None,
+        "Fecha":                  (fecha.isoformat() if fecha else datetime.date.today().isoformat()),
+        "Rubro":                  label,
+        "QT":                     "Sí",
+        "T. Cambio":              tc_display,
+        "(+ IVA)":                iva_f,
+        "Cantidad":               qty,
+        "Precio Unitario":        pu,
+        "Subtotal (Sin IVA)":     sub,
+        "IVA 16%":                iva,
+        "Total con IVA":          tot,
+        "Diferencia final":       None,
         "Monto en Anexo Escrito": None,
-        "Observaciones":      " | ".join(obs_parts),
+        "Observaciones":          " | ".join(obs_parts) if obs_parts else "",
+        "_tc":                    tc,    # columna auxiliar, se elimina antes del df
     }
 
-# ──────────────────────────────────────────────────────────────
-# BANXICO API
-# ──────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3_600, show_spinner=False)
-def banxico_rate(fecha_iso: str, currency: str, token: str) -> Optional[float]:
-    if not token or not token.strip() or currency == "MXN": return None
-    serie = BANXICO_SERIES.get(currency.upper())
-    if not serie: return None
 
-    base = datetime.date.fromisoformat(fecha_iso)
-    for offset in range(6):
-        d = (base - datetime.timedelta(days=offset)).strftime("%Y-%m-%d")
-        url = f"https://www.banxico.org.mx/SieAPIRest/service/v1/series/{serie}/datos/{d}/{d}"
-        try:
-            resp = requests.get(url, headers={"Bmx-Token": token.strip()}, timeout=8)
-            if resp.status_code != 200: break
-            datos = resp.json().get("bmx", {}).get("series", [{}])[0].get("datos", [])
-            if datos and datos[0].get("dato", "N/E") != "N/E":
-                return float(datos[0].get("dato").replace(",", ""))
-        except Exception: break
-    return None
+# ─────────────────────────────────────────────────────────────
+# EXPORTACIÓN EXCEL  (F6, F11 corregidos + formato exacto plantilla)
+# ─────────────────────────────────────────────────────────────
+def _side(style: str = "thin") -> Side:
+    return Side(style=style, color="000000")
 
-# ──────────────────────────────────────────────────────────────
-# EXCEL BUILDER 
-# ──────────────────────────────────────────────────────────────
-def _side() -> Side: return Side(style="thin")
-def _border() -> Border: s = _side(); return Border(left=s, right=s, top=s, bottom=s)
-def _fill(hex6: str) -> PatternFill: return PatternFill("solid", fgColor=hex6)
-def _font(bold=False, theme_white=False, size=11) -> Font:
-    kwargs = dict(bold=bold, size=size, name="Calibri")
-    if theme_white:
-        from openpyxl.styles.colors import Color
-        kwargs["color"] = Color(theme=0)
-    return Font(**kwargs)
-def _align(h="general", wrap=False) -> Alignment: return Alignment(horizontal=h, vertical="center", wrap_text=wrap)
 
-def build_excel(df: pd.DataFrame, project_name: str) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    
-    # Nombre de la hoja limpio y genérico (máximo 31 caracteres para Excel)
-    safe_title = re.sub(r'[\\/*?:\[\]]', '', project_name).strip() or "Conciliación"
-    ws.title = safe_title[:31]
+def _border(style: str = "thin") -> Border:
+    s = _side(style)
+    return Border(left=s, right=s, top=s, bottom=s)
 
-    n = len(df)
-    D_START = 3; D_END = D_START + n - 1; TOT_ROW = D_END + 1
 
-    # Encabezado principal genérico fusionado a lo largo de toda la tabla
-    c = ws.cell(1, 1, project_name.upper() if project_name else "COTIZACIONES")
-    c.fill = _fill("6E152E"); c.font = _font(bold=True, theme_white=True, size=12); c.alignment = _align("center")
-    ws.merge_cells("A1:M1")
+def _fill(rgb: str) -> PatternFill:
+    return PatternFill("solid", start_color=rgb, end_color=rgb)
+
+
+def to_excel(
+    df: pd.DataFrame,
+    num: str = "",
+    nombre: str = "",
+    blank: bool = False,
+) -> bytes:
+    """
+    Genera el archivo Excel en el formato exacto de la plantilla PAR.
+    Si blank=True genera una plantilla vacía con fórmulas para edición manual.
+
+    F6: H, I, J, K siempre usan fórmulas (nunca sobrescritos con valores).
+    F11: fila de totales en rango s_xl..e_xl, siempre menor que tot_row.
+    """
+    buf = io.BytesIO()
+    wb  = openpyxl.Workbook()
+    ws  = wb.active
+    ws.title = f"PAR {num}" if num else "Conciliación"
+
+    # ── Estilos base ──────────────────────────────────────────
+    FN = {"name": "Calibri", "size": 11}
+    F_WHITE = Font(**FN, bold=True, color="FFFFFF")
+    F_HDR   = Font(**FN, bold=True, color="000000")
+    F_DATA  = Font(**FN, color="000000")
+    F_TOT   = Font(**FN, bold=True, color="000000")
+
+    FILL_ROW1  = _fill("6E152E")    # burdeos (fila 1)
+    FILL_HDR_A = _fill("D4C19C")    # arena oscuro (cols A-K)
+    FILL_HDR_B = _fill("EBE2D1")    # arena claro  (cols L-M)
+
+    BD = _border("thin")
+    BD_MED = _border("medium")
+
+    AL_C  = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    AL_L  = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    AL_R  = Alignment(horizontal="right",  vertical="center")
+
+    n_rows = len(df)
+
+    # ── Anchos de columna ─────────────────────────────────────
+    for col_idx, width in enumerate(_WIDTHS_COL, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # ── Fila 1: proyecto ──────────────────────────────────────
     ws.row_dimensions[1].height = 27.75
+    for ci, val in enumerate([num, nombre], 1):
+        c = ws.cell(row=1, column=ci, value=val)
+        c.font = F_WHITE
+        c.fill = FILL_ROW1
+        c.border = BD
+        c.alignment = AL_C
+        if ci == 1:
+            c.number_format = "000"
 
-    headers = ["Fecha", "Rubro", "QT", "T. Cambio ", "(+ IVA)", "Cantidad", "Precio Unitario", "Subtotal (Sin IVA)", " IVA 16%", "Total con IVA", "Diferencia final ", "Monto en Anexo Escrito", "Observaciones"]
-    for ci, (hdr, width) in enumerate(zip(headers, COL_WIDTHS), start=1):
-        c = ws.cell(2, ci, hdr)
-        c.fill = _fill("EBE2D1") if ci >= 12 else _fill("D4C19C")
-        c.font = _font(bold=True); c.alignment = _align("center"); c.border = _border()
-        ws.column_dimensions[get_column_letter(ci)].width = width
+    # ── Fila 2: encabezados ───────────────────────────────────
     ws.row_dimensions[2].height = 21.75
+    for ci, hdr in enumerate(_COLS, 1):
+        fill = FILL_HDR_A if ci <= 11 else FILL_HDR_B
+        c = ws.cell(row=2, column=ci, value=hdr)
+        c.font   = F_HDR
+        c.fill   = fill
+        c.border = BD
+        c.alignment = AL_C
+
+    # ── Filas de datos (DATA_START = 3) ───────────────────────
+    DS = 3  # DATA_START
+
+    def _money_cell(ws, r, ci, val=None):
+        c = ws.cell(row=r, column=ci, value=val)
+        c.number_format = _FMT_MONEY
+        c.font   = F_DATA
+        c.border = BD
+        c.alignment = AL_R
+        return c
 
     for i, (_, row) in enumerate(df.iterrows()):
-        er = D_START + i
-        def wc(col: int, value=None, formula: str = None, fmt: str = None, bold: bool = False, wrap: bool = False):
-            c = ws.cell(er, col, value if formula is None else formula)
-            c.border = _border(); c.alignment = _align("center" if col in {3, 4, 5} else "left", wrap=wrap)
-            if fmt: c.number_format = fmt
-            if bold: c.font = _font(bold=True)
-            return c
+        r = DS + i
+        ws.row_dimensions[r].height = 18
 
+        # A: Fecha
         fv = row.get("Fecha")
         if isinstance(fv, str):
-            try: fv = datetime.datetime.fromisoformat(fv)
-            except ValueError: fv = datetime.datetime.today()
-        wc(1, fv, fmt=DATE_FMT)
-        wc(2, str(row.get("Rubro") or ""), wrap=True)
-        wc(3, str(row.get("QT") or "Sí"))
-        tc = str(row.get("T. Cambio") or "MXN")
-        wc(4, tc)
-        wc(5, str(row.get("(+ IVA)") or "N/M"))
-        qty = int(_f(row.get("Cantidad")) or 1)
-        wc(6, qty, fmt="0.00")
-        
-        g_val = _f(row.get("Precio Unitario"))
-        wc(7, g_val, fmt=MONEY_FMT)
-        if g_val is not None: wc(8, formula=f"=F{er}*G{er}", fmt=MONEY_FMT)
-        else: wc(8, _f(row.get("Subtotal (Sin IVA)")), fmt=MONEY_FMT)
-        
-        if str(row.get("(+ IVA)") or "N/M").upper() == "NO": wc(9, None, fmt=MONEY_FMT)
-        else: wc(9, formula=f"=H{er}*0.16", fmt=MONEY_FMT)
-        
-        wc(10, formula=f"=H{er}+I{er}", fmt=MONEY_FMT)
-        wc(11, formula=f"=J{er}-L{er}", fmt=MONEY_FMT)
-        wc(12, _f(row.get("Monto en Anexo Escrito")), fmt=MONEY_FMT, bold=True)
-        
-        obs = str(row.get("Observaciones") or "")
-        tc_val = _f(row.get("_tc_rate"))
-        if tc_val is not None and tc != "MXN":
-            obs = f"{obs} | TC {tc}: {tc_val:,.4f} MXN".lstrip(" | ")
-        wc(13, obs, wrap=True)
+            try:
+                fv = datetime.date.fromisoformat(fv)
+            except Exception:
+                fv = None
+        if isinstance(fv, (datetime.date, datetime.datetime)):
+            dt = datetime.datetime.combine(fv, datetime.time()) if isinstance(fv, datetime.date) else fv
+            c = ws.cell(row=r, column=1, value=dt)
+            c.number_format = _FMT_DATE
+        else:
+            c = ws.cell(row=r, column=1, value=str(fv or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
 
-    for ci in (10, 11, 12):
-        cl = get_column_letter(ci)
-        c = ws.cell(TOT_ROW, ci, f"=SUM({cl}{D_START}:{cl}{D_END})")
-        c.border = _border(); c.number_format = MONEY_FMT; c.font = _font(bold=True)
+        # B: Rubro
+        c = ws.cell(row=r, column=2, value=str(row.get("Rubro","") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_L
 
-    buf = io.BytesIO()
+        # C: QT
+        c = ws.cell(row=r, column=3, value=str(row.get("QT","Sí")))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # D: T. Cambio
+        c = ws.cell(row=r, column=4, value=str(row.get("T. Cambio","MXN") or "MXN"))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # E: (+IVA)
+        c = ws.cell(row=r, column=5, value=str(row.get("(+ IVA)","") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # F: Cantidad  (numfmt 0.00 = plantilla original)
+        q = _safe_f(row.get("Cantidad"))
+        c = ws.cell(row=r, column=6, value=int(q) if q is not None else 1)
+        c.number_format = "0.00"; c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # G: Precio Unitario (input del usuario)
+        pu = None if blank else _safe_f(row.get("Precio Unitario"))
+        _money_cell(ws, r, 7, pu)
+
+        # ─── F6: columnas calculadas SIEMPRE con fórmula ────────
+        has_iva = str(row.get("(+ IVA)", "N/M")).strip().lower() == "sí" and not blank
+
+        # H: Subtotal = F * G
+        ws.cell(row=r, column=8, value=f"=F{r}*G{r}").number_format = _FMT_MONEY
+        ws.cell(row=r, column=8).font = F_DATA
+        ws.cell(row=r, column=8).border = BD
+        ws.cell(row=r, column=8).alignment = AL_R
+
+        # I: IVA 16% = H * 0.16  (solo si tiene IVA; si no, fórmula igual a 0)
+        i_formula = f"=H{r}*0.16" if has_iva else ""
+        ws.cell(row=r, column=9, value=i_formula or None).number_format = _FMT_MONEY
+        ws.cell(row=r, column=9).font = F_DATA
+        ws.cell(row=r, column=9).border = BD
+        ws.cell(row=r, column=9).alignment = AL_R
+
+        # J: Total con IVA = H + I
+        j_formula = f"=H{r}+I{r}" if has_iva else f"=H{r}"
+        ws.cell(row=r, column=10, value=j_formula).number_format = _FMT_MONEY
+        ws.cell(row=r, column=10).font = F_DATA
+        ws.cell(row=r, column=10).border = BD
+        ws.cell(row=r, column=10).alignment = AL_R
+
+        # K: Diferencia final = J - L
+        ws.cell(row=r, column=11, value=f"=J{r}-L{r}").number_format = _FMT_MONEY
+        ws.cell(row=r, column=11).font = F_DATA
+        ws.cell(row=r, column=11).border = BD
+        ws.cell(row=r, column=11).alignment = AL_R
+
+        # L: Monto en Anexo Escrito (input del usuario)
+        anx = None if blank else _safe_f(row.get("Monto en Anexo Escrito"))
+        c = _money_cell(ws, r, 12, anx)
+        c.font = Font(name="Calibri", size=11, bold=True, color="000000")
+
+        # M: Observaciones
+        c = ws.cell(row=r, column=13, value="" if blank else str(row.get("Observaciones","") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_L
+
+    # ── Fila de TOTALES  (F11 corregido) ─────────────────────
+    if n_rows > 0:
+        tot_row = DS + n_rows           # siempre DESPUÉS de la última fila de datos
+        s_xl    = DS                    # primera fila de datos (1-based Excel)
+        e_xl    = DS + n_rows - 1       # última  fila de datos → siempre < tot_row ✓
+        ws.row_dimensions[tot_row].height = 18
+
+        c = ws.cell(row=tot_row, column=1, value="TOTALES")
+        c.font = F_TOT; c.border = BD_MED
+
+        for ci in (10, 11, 12):     # J, K, L
+            col_l = get_column_letter(ci)
+            c = ws.cell(
+                row=tot_row, column=ci,
+                value=f"=SUM({col_l}{s_xl}:{col_l}{e_xl})"
+            )
+            c.number_format = _FMT_MONEY
+            c.font   = F_TOT
+            c.fill   = _fill("EBE2D1")
+            c.border = BD_MED
+            c.alignment = AL_R
+
+    # Congelar fila de encabezados
+    ws.freeze_panes = "A3"
+
     wb.save(buf)
-    return buf.getvalue()
+    buf.seek(0)
+    return buf.read()
 
-# ──────────────────────────────────────────────────────────────
-# SESSION STATE & SIDEBAR
-# ──────────────────────────────────────────────────────────────
-_DEFAULTS: dict = {"pdf_bytes": None, "pdf_hash": None, "total_pages": 0, "current_page": 0, "num_sec": 1, "sec_cfg": [], "df": None, "extracted": False, "banxico_token": os.getenv("BANXICO_TOKEN", ""), "project_name": ""}
-for _k, _v in _DEFAULTS.items(): st.session_state.setdefault(_k, _v)
 
+# ─────────────────────────────────────────────────────────────
+# CALLBACKS DE NAVEGACIÓN  (F2 corregido)
+# ─────────────────────────────────────────────────────────────
+def _go_to(target: int) -> None:
+    """Único punto de escritura para current_page."""
+    tp = max(st.session_state.total_pages - 1, 0)
+    st.session_state.current_page = max(0, min(tp, target))
+
+
+# ─────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 📂 Documento PDF")
-    up = st.file_uploader("Sube el archivo PDF", type=["pdf"])
+    up = st.file_uploader("Sube el PDF de cotizaciones", type=["pdf"])
     if up:
         raw = up.read()
-        h = _md5(raw)
+        h   = _md5(raw)
         if h != st.session_state.pdf_hash:
-            with fitz.open(stream=raw, filetype="pdf") as d: pages = len(d)
-            st.session_state.update(pdf_bytes=raw, pdf_hash=h, total_pages=pages, current_page=0, extracted=False, df=None)
-        st.success(f"✅ {st.session_state.total_pages} páginas cargadas")
+            st.session_state.update(
+                pdf_bytes=raw, pdf_hash=h,
+                extracted=False, df=None, df_hash="", current_page=0,
+            )
+            with fitz.open(stream=raw, filetype="pdf") as d:
+                st.session_state.total_pages = len(d)
+        st.success(f"✅ {st.session_state.total_pages} págs. cargadas")
 
     st.markdown("---")
-    st.markdown("### 📁 Proyecto")
-    st.session_state.project_name = st.text_input("Nombre del proyecto (Opcional)", value=st.session_state.project_name, key="inp_pname")
+    st.markdown("### 🏷 Proyecto PAR")
+    st.session_state.proyecto_num    = st.text_input(
+        "Número PAR", value=st.session_state.proyecto_num, placeholder="009"
+    )
+    st.session_state.proyecto_nombre = st.text_input(
+        "Nombre del proyecto", value=st.session_state.proyecto_nombre,
+        placeholder="VELOCIDAD ACTIVA"
+    )
 
     st.markdown("---")
-    st.markdown("### 💱 Tipo de cambio (Banxico)")
-    st.session_state.banxico_token = st.text_input("Token API Banxico", value=st.session_state.banxico_token, type="password", key="inp_token")
-    st.caption("Se usa cuando T. Cambio ≠ MXN para buscar el FIX de Banxico.")
+    st.markdown("### 💱 Banxico – Tipo de Cambio")
+    # Prioridad: secrets → sidebar
+    _token_default = st.secrets.get("BANXICO_TOKEN", "") if hasattr(st, "secrets") else ""
+    bx_token = st.text_input(
+        "Token Bmx-Token",
+        value=_token_default,
+        type="password",
+        placeholder="Solo necesario para cotizaciones en USD/EUR/CAD",
+        help="Obtén tu token gratuito en banxico.org.mx/SieAPIRest",
+    )
+    if bx_token:
+        st.caption("🔑 Token activo")
 
     st.markdown("---")
-    st.markdown("### ⚙️ Secciones / Cotizaciones")
-    tp = st.session_state.total_pages or 1
-    n_sec = int(st.number_input("Número de secciones", min_value=1, max_value=50, value=st.session_state.num_sec, step=1, key="inp_nsec"))
-    if n_sec != st.session_state.num_sec:
-        st.session_state.num_sec = n_sec; st.session_state.extracted = False; st.session_state.df = None
+    st.markdown("### ⚙️ Secciones (cotizaciones)")
+    n = int(st.number_input(
+        "Número de secciones", min_value=1, max_value=50,
+        value=st.session_state.num_sec, step=1,
+    ))
+    if n != st.session_state.num_sec:
+        st.session_state.num_sec  = n
+        st.session_state.extracted = False
+        st.session_state.df       = None
 
-    cfgs = st.session_state.sec_cfg
-    while len(cfgs) < n_sec:
+    cfgs = list(st.session_state.sec_cfg)
+    tp   = max(st.session_state.total_pages, 1)
+
+    while len(cfgs) < n:
         i = len(cfgs) + 1
-        cfgs.append({"label": f"Sección {i}", "p0": i, "p1": i, "det_iva": True, "calc_sub": True})
-    del cfgs[n_sec:]
+        cfgs.append({
+            "label": f"Sección {i}", "p0": 1, "p1": 1,
+            "det_iva": True, "calc_sub": True, "moneda": "MXN",
+        })
+    cfgs = cfgs[:n]
 
-    for i, cfg in enumerate(cfgs):
-        with st.expander(f"📄 Sección {i + 1}", expanded=(n_sec <= 4)):
-            cfg["label"] = st.text_input("Rubro / Concepto", value=cfg["label"], key=f"lb_{i}")
-            col_a, col_b = st.columns(2)
-            p0 = col_a.number_input("Pág. inicio", min_value=1, max_value=tp, value=min(cfg["p0"], tp), key=f"p0_{i}")
-            p1 = col_b.number_input("Pág. fin", min_value=p0, max_value=tp, value=max(min(cfg["p1"], tp), p0), key=f"p1_{i}")
-            cfg["p0"] = p0; cfg["p1"] = p1
-            cfg["det_iva"]  = st.checkbox("Detectar IVA", value=cfg["det_iva"], key=f"iv_{i}")
-            cfg["calc_sub"] = st.checkbox("Calcular subtotal si falta", value=cfg["calc_sub"], key=f"cs_{i}")
+    for i, c in enumerate(cfgs):
+        with st.expander(f"📄 Sección {i + 1}", expanded=(n <= 6)):
+            c["label"]  = st.text_input("Rubro / Concepto", value=c["label"], key=f"lb{i}")
+            ca, cb      = st.columns(2)
+            c["p0"]     = ca.number_input("Pág. Inicio", 1, tp, min(c["p0"], tp), key=f"p0{i}")
+            c["p1"]     = cb.number_input("Pág. Fin", c["p0"], tp,
+                                          max(min(c["p1"], tp), c["p0"]), key=f"p1{i}")
+            c["moneda"] = st.selectbox(
+                "Moneda de la cotización",
+                ["MXN", "USD", "EUR", "CAD"],
+                index=["MXN", "USD", "EUR", "CAD"].index(c.get("moneda", "MXN")),
+                key=f"mon{i}",
+            )
+            c["det_iva"]  = st.checkbox("Detectar IVA", value=c["det_iva"],  key=f"iv{i}")
+            c["calc_sub"] = st.checkbox("Calcular subtotal si falta", value=c["calc_sub"], key=f"cs{i}")
+
+    st.session_state.sec_cfg = cfgs
 
     st.markdown("---")
-    btn_extract = st.button("🔍 Extraer Montos", disabled=(st.session_state.pdf_bytes is None), use_container_width=True, type="primary")
+    run = st.button(
+        "🔍 Extraer Montos",
+        disabled=(st.session_state.pdf_bytes is None),
+        use_container_width=True,
+        type="primary",
+    )
 
-# ──────────────────────────────────────────────────────────────
-# HEADER & EXTRACTION
-# ──────────────────────────────────────────────────────────────
-st.markdown('<div class="hdr"><h1>📋 Conciliador de Cotizaciones PDF</h1><p>Extrae, edita y exporta montos desde documentos PDF — de forma general</p></div>', unsafe_allow_html=True)
 
-if btn_extract and st.session_state.pdf_bytes:
+# ─────────────────────────────────────────────────────────────
+# CABECERA PRINCIPAL
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="hdr">
+  <h1>📋 Conciliador de Cotizaciones · EFIDEPORTE</h1>
+  <p>Extracción automática PDF · OCR adaptativo · Tipo de cambio Banxico · Plantilla Excel PAR</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# PROCESO DE EXTRACCIÓN
+# ─────────────────────────────────────────────────────────────
+if run and st.session_state.pdf_bytes:
     rows: list[dict] = []
-    bar = st.progress(0, text="Iniciando extracción…")
+    n_secs = st.session_state.num_sec
+    bar    = st.progress(0, text="Iniciando extracción…")
 
-    for i, cfg in enumerate(st.session_state.sec_cfg):
-        bar.progress((i + 0.4) / n_sec, text=f"Extrayendo: {cfg['label']}")
+    for i, c in enumerate(st.session_state.sec_cfg):
+        bar.progress((i + 0.3) / n_secs, text=f"🔍 {c['label']}…")
         try:
-            row = extract_section(st.session_state.pdf_bytes, cfg["label"], cfg["p0"], cfg["p1"], cfg["det_iva"], cfg["calc_sub"])
+            row = extract(
+                st.session_state.pdf_bytes,
+                c["label"], c["p0"], c["p1"],
+                c["det_iva"], c["calc_sub"],
+                moneda=c.get("moneda", "MXN"),
+                bx_token=bx_token,
+            )
+            rows.append(row)
         except Exception as exc:
-            row = {k: None for k in COLS} | {"Rubro": cfg["label"], "QT": "Sí", "T. Cambio": "MXN", "Cantidad": 1, "Fecha": datetime.date.today().isoformat(), "Observaciones": f"Error al procesar: {str(exc)[:80]}"}
-
-        row["_tc_rate"] = None
-        tc_currency = str(row.get("T. Cambio") or "MXN")
-        if tc_currency != "MXN" and st.session_state.banxico_token:
-            row["_tc_rate"] = banxico_rate(row["Fecha"], tc_currency, st.session_state.banxico_token)
-        rows.append(row)
-        bar.progress((i + 1) / n_sec)
+            st.warning(f"⚠️ Sección {i + 1} «{c['label']}»: {str(exc)[:120]}")
+            rows.append({
+                **{k: None for k in _COLS},
+                "Rubro": c["label"], "QT": "Sí",
+                "T. Cambio": c.get("moneda", "MXN"),
+                "Cantidad": 1,
+                "Fecha": datetime.date.today().isoformat(),
+                "Observaciones": f"Error: {str(exc)[:100]}",
+                "_tc": None,
+            })
+        bar.progress((i + 1) / n_secs)
 
     bar.empty()
-    df_new = pd.DataFrame(rows, columns=COLS + ["_tc_rate"])
-    df_new["Diferencia final"] = (df_new["Total con IVA"].fillna(0) - df_new["Monto en Anexo Escrito"].fillna(0)).where(df_new["Total con IVA"].notna() | df_new["Monto en Anexo Escrito"].notna())
-    st.session_state.df = df_new
+
+    # Quitar columna auxiliar _tc antes de guardar en session_state
+    df_new = pd.DataFrame(rows).reindex(columns=_COLS + ["_tc"])
+    df_new = df_new.drop(columns=["_tc"], errors="ignore").reindex(columns=_COLS)
+    df_new = recalc_derived(df_new)
+
+    st.session_state.df        = df_new
+    st.session_state.df_hash   = _df_hash(df_new)
     st.session_state.extracted = True
     st.success(f"✅ {len(rows)} sección(es) procesada(s).")
+
 
 if st.session_state.pdf_bytes is None:
     st.info("👈 Sube un PDF en la barra lateral para comenzar.")
     st.stop()
 
-# ──────────────────────────────────────────────────────────────
-# MAIN LAYOUT
-# ──────────────────────────────────────────────────────────────
-left_col, right_col = st.columns(2, gap="medium")
 
-with left_col:
+# ─────────────────────────────────────────────────────────────
+# LAYOUT: VISOR  +  EDITOR
+# ─────────────────────────────────────────────────────────────
+col_L, col_R = st.columns(2, gap="medium")
+
+
+# ── VISOR DE DOCUMENTO ───────────────────────────────────────
+with col_L:
     st.markdown('<p class="ptitle">🔍 Visor de Documento</p>', unsafe_allow_html=True)
-    tp = st.session_state.total_pages; cp = st.session_state.current_page
-    nav1, nav2, nav3 = st.columns([1, 4, 1])
-    if nav1.button("◀", key="btn_prev"): cp = max(0, cp - 1)
-    cp = int(nav2.number_input("", 1, tp, cp + 1, label_visibility="collapsed", key="inp_pg")) - 1
-    if nav3.button("▶", key="btn_next"): cp = min(tp - 1, cp + 1)
-    st.session_state.current_page = cp
+
+    tp = st.session_state.total_pages
+
+    # F2: botones usan on_click con args → no hay desincronización de estado
+    nav_p, nav_c, nav_n = st.columns([1, 4, 1])
+    nav_p.button("◀", key="btn_prev", use_container_width=True,
+                 on_click=_go_to, args=(st.session_state.current_page - 1,))
+    nav_n.button("▶", key="btn_next", use_container_width=True,
+                 on_click=_go_to, args=(st.session_state.current_page + 1,))
+
+    # F2: number_input como fuente de verdad única fuera de callbacks
+    cp = st.session_state.current_page
+    page_sel = nav_c.number_input(
+        "Página", min_value=1, max_value=tp,
+        value=cp + 1, step=1,
+        label_visibility="collapsed", key="nav_page_input",
+    )
+    if page_sel - 1 != cp:
+        st.session_state.current_page = page_sel - 1
+        cp = page_sel - 1
+
     st.caption(f"Página {cp + 1} de {tp}")
 
-    for cfg in st.session_state.sec_cfg:
-        if cfg["p0"] <= cp + 1 <= cfg["p1"]:
-            st.markdown(f'<span style="background:#2d4a8f;color:#fff;padding:3px 10px;border-radius:4px;font-size:.8rem">📑 {cfg["label"]}</span>', unsafe_allow_html=True)
+    # Badge de sección activa
+    for c_cfg in st.session_state.sec_cfg:
+        if c_cfg["p0"] <= cp + 1 <= c_cfg["p1"]:
+            st.markdown(
+                f'<span style="background:#6E152E;color:#fff;padding:3px 10px;'
+                f'border-radius:4px;font-size:.8rem">📑 {c_cfg["label"]}'
+                f' · <span class="tag-moneda">{c_cfg.get("moneda","MXN")}</span></span>',
+                unsafe_allow_html=True,
+            )
             break
-    with st.spinner("Cargando página…"): st.image(_render_png(st.session_state.pdf_bytes, cp), use_container_width=True)
-    st.download_button("📥 Descargar PDF", data=st.session_state.pdf_bytes, file_name="documento.pdf", mime="application/pdf", use_container_width=True)
 
-with right_col:
-    st.markdown('<p class="ptitle">✏️ Editor de Datos</p>', unsafe_allow_html=True)
-    if not st.session_state.extracted or st.session_state.df is None:
-        st.info("Configura las secciones y presiona **🔍 Extraer Montos**.")
-    else:
-        df: pd.DataFrame = st.session_state.df
-        tc_rows = df[df["T. Cambio"].ne("MXN") & df["_tc_rate"].notna()]
-        if not tc_rows.empty:
-            for _, r in tc_rows.iterrows():
-                st.markdown(f'<div class="tc-box">💱 <b>{r["Rubro"]}</b>: 1 {r["T. Cambio"]} = <b>{r["_tc_rate"]:,.4f} MXN</b> (Banxico FIX · {r["Fecha"]})</div>', unsafe_allow_html=True)
-
-        kpi_area = st.container()
-        display_cols = [c for c in df.columns if not c.startswith("_")]
-        edited = st.data_editor(
-            df[display_cols], key="editor_main", use_container_width=True, hide_index=True, num_rows="dynamic",
-            column_config={
-                "Fecha": st.column_config.TextColumn("Fecha", width="small"),
-                "Rubro": st.column_config.TextColumn("Rubro", width="large"),
-                "QT": st.column_config.SelectboxColumn("QT", options=["Sí", "No"], width="small"),
-                "T. Cambio": st.column_config.SelectboxColumn("T. Cambio", options=["MXN", "USD", "EUR", "CAD", "GBP", "JPY"], width="small"),
-                "(+ IVA)": st.column_config.SelectboxColumn("(+ IVA)", options=["Sí", "No", "N/M"], width="small"),
-                "Cantidad": st.column_config.NumberColumn("Cant.", format="%d", width="small"),
-                "Precio Unitario": st.column_config.NumberColumn("P. Unit.", format="$%.2f", width="medium"),
-                "Subtotal (Sin IVA)": st.column_config.NumberColumn("Subtotal", format="$%.2f", width="medium"),
-                "IVA 16%": st.column_config.NumberColumn("IVA 16%", format="$%.2f", width="medium"),
-                "Total con IVA": st.column_config.NumberColumn("Total", format="$%.2f", width="medium"),
-                "Diferencia final": st.column_config.NumberColumn("Dif.", format="$%.2f", width="medium"),
-                "Monto en Anexo Escrito": st.column_config.NumberColumn("Ref. Escrito", format="$%.2f", width="medium"),
-                "Observaciones": st.column_config.TextColumn("Observaciones", width="large"),
-            }
+    with st.spinner("Cargando…"):
+        st.image(
+            _render(st.session_state.pdf_hash, cp),
+            use_container_width=True,
         )
 
-        if edited is not None:
-            tc_col = df["_tc_rate"] if "_tc_rate" in df.columns else pd.Series([None]*len(edited))
-            merged = edited.copy()
-            merged["_tc_rate"] = tc_col.values[:len(merged)]
-            st.session_state.df = merged
-            df = st.session_state.df
+    st.download_button(
+        "📥 Descargar PDF", data=st.session_state.pdf_bytes,
+        file_name="cotizaciones.pdf", mime="application/pdf",
+        use_container_width=True,
+    )
 
-        token = st.session_state.banxico_token
-        if token:
-            for idx in range(len(df)):
-                cur = str(df.at[idx, "T. Cambio"] if "T. Cambio" in df.columns else "MXN")
-                if cur != "MXN" and ("_tc_rate" not in df.columns or pd.isna(df.at[idx, "_tc_rate"]) or df.at[idx, "_tc_rate"] is None):
-                    fecha_str = str(df.at[idx, "Fecha"] or datetime.date.today())
-                    df.at[idx, "_tc_rate"] = banxico_rate(fecha_str, cur, token)
 
-        tot_sum = _f(df["Total con IVA"].sum(skipna=True)) or 0.0
-        ref_sum = _f(df["Monto en Anexo Escrito"].sum(skipna=True)) or 0.0
-        dif_sum = tot_sum - ref_sum
+# ── EDITOR DE DATOS ───────────────────────────────────────────
+with col_R:
+    st.markdown('<p class="ptitle">✏️ Editor de Datos</p>', unsafe_allow_html=True)
 
-        with kpi_area:
+    if not st.session_state.extracted or st.session_state.df is None:
+        st.info("Configura las secciones y presiona **🔍 Extraer Montos**.")
+
+    else:
+        # F7: guard explícito — nunca operar sobre df_cur si es None
+        df_cur = st.session_state.df
+        if df_cur is None or df_cur.empty:
+            st.warning("Sin datos. Ejecuta nuevamente la extracción.")
+            st.stop()
+
+        kpi_slot = st.container()
+
+        # ── Editor interactivo (F1: hash real para detectar cambios) ──
+        edited_df = st.data_editor(
+            df_cur,
+            key="data_editor_main",
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            column_config={
+                "Fecha":                  st.column_config.TextColumn("Fecha",         width="small"),
+                "Rubro":                  st.column_config.TextColumn("Rubro",         width="large"),
+                "QT":                     st.column_config.SelectboxColumn("QT",       options=["Sí","No"], width="small"),
+                "T. Cambio":              st.column_config.TextColumn("Moneda/TC",     width="small"),
+                "(+ IVA)":                st.column_config.SelectboxColumn("IVA",      options=["Sí","No","N/M"], width="small"),
+                "Cantidad":               st.column_config.NumberColumn("Cant.",       format="%d",    width="small"),
+                "Precio Unitario":        st.column_config.NumberColumn("P. Unit.",    format="$%.2f", width="medium"),
+                "Subtotal (Sin IVA)":     st.column_config.NumberColumn("Subtotal",    format="$%.2f", width="medium"),
+                "IVA 16%":                st.column_config.NumberColumn("IVA 16%",     format="$%.2f", width="medium"),
+                "Total con IVA":          st.column_config.NumberColumn("Total c/IVA", format="$%.2f", width="medium"),
+                "Diferencia final":       st.column_config.NumberColumn("Diferencia",  format="$%.2f", width="medium"),
+                "Monto en Anexo Escrito": st.column_config.NumberColumn("Anexo $",     format="$%.2f", width="medium"),
+                "Observaciones":          st.column_config.TextColumn("Observaciones", width="large"),
+            },
+        )
+
+        # F1: solo recalcular y guardar si el usuario REALMENTE editó algo
+        new_hash = _df_hash(edited_df)
+        if new_hash != st.session_state.df_hash:
+            st.session_state.df      = recalc_derived(edited_df)
+            st.session_state.df_hash = new_hash
+
+        df_cur = st.session_state.df
+
+        # ── KPIs ─────────────────────────────────────────────
+        ts_ = pd.to_numeric(df_cur["Total con IVA"],          errors="coerce").sum()
+        rs_ = pd.to_numeric(df_cur["Monto en Anexo Escrito"], errors="coerce").sum()
+        dif = ts_ - rs_
+        with kpi_slot:
             k1, k2, k3 = st.columns(3)
-            for col, val, lbl in [(k1, tot_sum, "Total Extraído"), (k2, ref_sum, "Monto Referencia"), (k3, dif_sum, "Diferencia")]:
-                color = "#c0392b" if (lbl == "Diferencia" and abs(dif_sum) > 0.01) else ("#28a745" if lbl == "Diferencia" else "#1a2744")
-                col.markdown(f'<div class="kpi"><div class="v" style="color:{color}">${val:,.2f}</div><div class="l">{lbl}</div></div>', unsafe_allow_html=True)
+            for kol, val, lbl in [
+                (k1, ts_, "Total Extraído"),
+                (k2, rs_, "Monto Referencia"),
+                (k3, dif, "Diferencia"),
+            ]:
+                color = "#6E152E" if lbl != "Diferencia" else (
+                    "#c0392b" if abs(dif) > 0.01 else "#28a745"
+                )
+                kol.markdown(
+                    f'<div class="kpi">'
+                    f'<div class="v" style="color:{color}">${val:,.2f}</div>'
+                    f'<div class="l">{lbl}</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        # Alertas de observaciones
+        warn_rows = df_cur[df_cur["Observaciones"].str.contains("⚠|OCR|inferido", na=False)]
+        if not warn_rows.empty:
+            with st.expander(f"⚠ {len(warn_rows)} aviso(s) de extracción"):
+                for _, wr in warn_rows.iterrows():
+                    st.caption(f"• **{wr['Rubro']}**: {wr['Observaciones']}")
 
         st.markdown("---")
-        col_xls, col_info = st.columns([3, 2])
+
+        # ── Descarga Excel con formato de plantilla PAR ───────
+        ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        pname  = (st.session_state.proyecto_nombre or "Cotizaciones").replace(" ", "_")
+        num    = st.session_state.proyecto_num
+        nombre = st.session_state.proyecto_nombre
+
         try:
-            xlsx_bytes = build_excel(df, project_name=st.session_state.project_name)
-            
-            # Nombre de archivo dinámico basado en si introdujeron nombre de proyecto
-            safe_name = re.sub(r'[\\/*?:\[\]\s]', '_', st.session_state.project_name).strip('_')
-            file_prefix = f"Cotizaciones_{safe_name}" if safe_name else "Cotizaciones_Generales"
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            
-            col_xls.download_button(
-                "⬇️ Descargar Excel (editable)", data=xlsx_bytes, file_name=f"{file_prefix}_{ts}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True
+            xlsx_bytes = to_excel(df_cur, num=num, nombre=nombre)
+            st.download_button(
+                "⬇️ Descargar Excel (plantilla PAR)",
+                data=xlsx_bytes,
+                file_name=f"Conciliacion_{pname}_{ts_str}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary",
             )
-            col_info.info("El Excel descargado contiene fórmulas vivas. Puedes editar montos directamente sin volver aquí.")
-        except Exception as exc: st.error(f"Error generando Excel: {exc}")
+        except Exception as exc:
+            st.error(f"Error generando Excel: {exc}")
+
+        # ── Plantilla vacía para edición manual directa ───────
+        with st.expander("📝 Edición manual directa en Excel"):
+            st.info(
+                "Descarga la **plantilla vacía**: las columnas Subtotal, IVA 16%, "
+                "Total con IVA y Diferencia final se calculan automáticamente con "
+                "fórmulas al escribir **Precio Unitario** (G) y **Monto en Anexo Escrito** (L). "
+                "El número de filas coincide con las secciones configuradas."
+            )
+            n_sec = st.session_state.num_sec
+            df_blank = pd.DataFrame({
+                "Fecha":                  [datetime.date.today().isoformat()] * n_sec,
+                "Rubro":                  [c["label"]          for c in st.session_state.sec_cfg],
+                "QT":                     ["Sí"]                * n_sec,
+                "T. Cambio":              [c.get("moneda","MXN") for c in st.session_state.sec_cfg],
+                "(+ IVA)":                ["Sí"]                * n_sec,
+                "Cantidad":               [1]                   * n_sec,
+                "Precio Unitario":        [None]                * n_sec,
+                "Subtotal (Sin IVA)":     [None]                * n_sec,
+                "IVA 16%":                [None]                * n_sec,
+                "Total con IVA":          [None]                * n_sec,
+                "Diferencia final":       [None]                * n_sec,
+                "Monto en Anexo Escrito": [None]                * n_sec,
+                "Observaciones":          [""]                  * n_sec,
+            })
+            try:
+                xlsx_blank = to_excel(df_blank, num=num, nombre=nombre, blank=True)
+                st.download_button(
+                    "📄 Descargar plantilla vacía",
+                    data=xlsx_blank,
+                    file_name=f"Plantilla_{pname}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+            except Exception as exc:
+                st.error(f"Error generando plantilla: {exc}")
