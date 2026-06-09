@@ -1121,7 +1121,7 @@ with col_R:
         try:
             xlsx_bytes = to_excel(df_cur, nombre=nombre)
             st.download_button(
-                "⬇️ Descargar Excel (plantilla PAR)",
+                "⬇️ Descargar Excel",
                 data=xlsx_bytes,
                 file_name=f"Conciliacion_{pname}_{ts_str}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
