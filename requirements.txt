@@ -1,9 +1,21 @@
-streamlit
-pandas
-pdfplumber
-PyMuPDF
-rapidocr-onnxruntime
-Pillow
-numpy
-openpyxl
-requests
+# ─────────────────────────────────────────────────────────────
+# Conciliador de Cotizaciones PDF  v3.0  |  requirements.txt
+# ─────────────────────────────────────────────────────────────
+# Cambios vs v2.1:
+#   ❌ eliminado: xlsxwriter       (reemplazado por openpyxl)
+#   ❌ eliminado: google-generativeai  (auditoría IA removida)
+#   ✅ añadido:   openpyxl         (plantilla Excel exacta PAR)
+#   ✅ añadido:   requests         (API Banxico SIE)
+
+streamlit>=1.35.0
+pymupdf>=1.23.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+pandas>=2.0.0
+pdfplumber>=0.10.0
+requests>=2.31.0
+
+# OCR para páginas escaneadas (carga lazy — la app funciona sin esto,
+# pero no extraerá texto de páginas 100% imagen como cotizaciones en foto).
+# En Streamlit Cloud tier gratuito puede causar OOM; omitir si no hay PDFs escaneados.
+rapidocr-onnxruntime>=1.3.0
