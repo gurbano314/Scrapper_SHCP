@@ -44,7 +44,7 @@ from openpyxl.utils import get_column_letter
 # CONFIGURACIÓN DE PÁGINA
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Conciliador de Cotizaciones",
+    page_title="Conciliador de Cotizaciones · EFIDEPORTE",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -156,7 +156,6 @@ _SS_DEFAULTS: dict = {
     "df_hash":        "",          # F1: hash del df para detectar cambios reales
     "extracted":      False,
     "bx_cache":       {},          # {(moneda, fecha_iso): float}
-    "proyecto_num":   "",
     "proyecto_nombre":"",
 }
 for _k, _v in _SS_DEFAULTS.items():
@@ -623,7 +622,6 @@ def _fill(rgb: str) -> PatternFill:
 
 def to_excel(
     df: pd.DataFrame,
-    num: str = "",
     nombre: str = "",
     blank: bool = False,
 ) -> bytes:
@@ -637,7 +635,7 @@ def to_excel(
     buf = io.BytesIO()
     wb  = openpyxl.Workbook()
     ws  = wb.active
-    ws.title = f"PAR {num}" if num else "Conciliación"
+    ws.title = (nombre[:31] if nombre else "Conciliación")
 
     # ── Estilos base ──────────────────────────────────────────
     FN = {"name": "Calibri", "size": 11}
@@ -663,16 +661,18 @@ def to_excel(
     for col_idx, width in enumerate(_WIDTHS_COL, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    # ── Fila 1: proyecto ──────────────────────────────────────
+    # ── Fila 1: nombre del proyecto ──────────────────────────────
     ws.row_dimensions[1].height = 27.75
-    for ci, val in enumerate([num, nombre], 1):
-        c = ws.cell(row=1, column=ci, value=val)
-        c.font = F_WHITE
-        c.fill = FILL_ROW1
-        c.border = BD
-        c.alignment = AL_C
-        if ci == 1:
-            c.number_format = "000"
+    c = ws.cell(row=1, column=1, value=nombre or "")
+    c.font      = F_WHITE
+    c.fill      = FILL_ROW1
+    c.border    = BD
+    c.alignment = AL_L
+    # Aplicar relleno burdeos a todas las columnas de la fila 1
+    for ci in range(2, len(_COLS) + 1):
+        cx = ws.cell(row=1, column=ci)
+        cx.fill   = FILL_ROW1
+        cx.border = BD
 
     # ── Fila 2: encabezados ───────────────────────────────────
     ws.row_dimensions[2].height = 21.75
@@ -835,25 +835,28 @@ with st.sidebar:
         st.success(f"✅ {st.session_state.total_pages} págs. cargadas")
 
     st.markdown("---")
-    st.markdown("### 🏷 Proyecto PAR")
-    st.session_state.proyecto_num    = st.text_input(
-        "Número PAR", value=st.session_state.proyecto_num, placeholder="009"
-    )
+    st.markdown("### 🏷 Proyecto")
     st.session_state.proyecto_nombre = st.text_input(
-        "Nombre del proyecto", value=st.session_state.proyecto_nombre,
-        placeholder="VELOCIDAD ACTIVA"
+        "Nombre del proyecto",
+        value=st.session_state.proyecto_nombre,
+        placeholder="Ej. VELOCIDAD ACTIVA",
     )
 
     st.markdown("---")
     st.markdown("### 💱 Banxico – Tipo de Cambio")
+    st.markdown(
+        "Obtén tu token gratuito en "
+        "[**SIE Banxico API** →](https://www.banxico.org.mx/SieAPIRest/) "
+        "*(solo necesario si hay cotizaciones en USD / EUR / CAD)*",
+        unsafe_allow_html=False,
+    )
     # Prioridad: secrets → sidebar
     _token_default = st.secrets.get("BANXICO_TOKEN", "") if hasattr(st, "secrets") else ""
     bx_token = st.text_input(
         "Token Bmx-Token",
         value=_token_default,
         type="password",
-        placeholder="Solo necesario para cotizaciones en USD/EUR/CAD",
-        help="Obtén tu token gratuito en banxico.org.mx/SieAPIRest",
+        placeholder="Pega aquí tu token de Banxico",
     )
     if bx_token:
         st.caption("🔑 Token activo")
@@ -1105,11 +1108,10 @@ with col_R:
         # ── Descarga Excel con formato de plantilla PAR ───────
         ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         pname  = (st.session_state.proyecto_nombre or "Cotizaciones").replace(" ", "_")
-        num    = st.session_state.proyecto_num
         nombre = st.session_state.proyecto_nombre
 
         try:
-            xlsx_bytes = to_excel(df_cur, num=num, nombre=nombre)
+            xlsx_bytes = to_excel(df_cur, nombre=nombre)
             st.download_button(
                 "⬇️ Descargar Excel (plantilla PAR)",
                 data=xlsx_bytes,
@@ -1146,7 +1148,7 @@ with col_R:
                 "Observaciones":          [""]                  * n_sec,
             })
             try:
-                xlsx_blank = to_excel(df_blank, num=num, nombre=nombre, blank=True)
+                xlsx_blank = to_excel(df_blank, nombre=nombre, blank=True)
                 st.download_button(
                     "📄 Descargar plantilla vacía",
                     data=xlsx_blank,
