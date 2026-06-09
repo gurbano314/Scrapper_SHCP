@@ -44,7 +44,7 @@ from openpyxl.utils import get_column_letter
 # CONFIGURACIÓN DE PÁGINA
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Conciliador de Cotizaciones",
+    page_title="Conciliador de Cotizaciones · EFIDEPORTE",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -56,7 +56,16 @@ st.markdown("""
 [data-testid="stSidebar"] * { color:#f0e0e6 !important; }
 [data-testid="stSidebar"] input,
 [data-testid="stSidebar"] select,
-[data-testid="stSidebar"] textarea { color:#111 !important; }
+[data-testid="stSidebar"] textarea {
+    color: #1a1a1a !important;
+    background-color: #f5e0e6 !important;
+    border-radius: 6px !important;
+}
+[data-testid="stSidebar"] input::placeholder,
+[data-testid="stSidebar"] textarea::placeholder {
+    color: #9a6070 !important;
+    opacity: 1 !important;
+}
 .hdr {
     background:linear-gradient(90deg,#6E152E,#a02048);
     padding:14px 22px; border-radius:8px; margin-bottom:18px;
@@ -839,7 +848,8 @@ with st.sidebar:
     st.session_state.proyecto_nombre = st.text_input(
         "Nombre del proyecto",
         value=st.session_state.proyecto_nombre,
-       )
+        placeholder="Ej. VELOCIDAD ACTIVA",
+    )
 
     st.markdown("---")
     st.markdown("### 💱 Banxico – Tipo de Cambio")
@@ -914,8 +924,8 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hdr">
-  <h1>📋 Conciliador de Cotizaciones</h1>
-  <p>Extracción automática PDF · OCR adaptativo · Tipo de cambio Banxico </p>
+  <h1>📋 Conciliador de Cotizaciones · EFIDEPORTE</h1>
+  <p>Extracción automática PDF · OCR adaptativo · Tipo de cambio Banxico · Plantilla Excel PAR</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -966,7 +976,7 @@ if run and st.session_state.pdf_bytes:
 
 
 if st.session_state.pdf_bytes is None:
-    st.info(" Sube un PDF en la barra lateral para comenzar.")
+    st.info("👈 Sube un PDF en la barra lateral para comenzar.")
     st.stop()
 
 
