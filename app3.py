@@ -839,8 +839,7 @@ with st.sidebar:
     st.session_state.proyecto_nombre = st.text_input(
         "Nombre del proyecto",
         value=st.session_state.proyecto_nombre,
-        placeholder="",
-    )
+       )
 
     st.markdown("---")
     st.markdown("### 💱 Banxico – Tipo de Cambio")
