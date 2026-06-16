@@ -68,44 +68,83 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-[data-testid="stSidebar"] { background:#6E152E; }
-[data-testid="stSidebar"] * { color:#f0e0e6 !important; }
+:root {
+    color-scheme: light dark;
+    --app-bg: #ffffff;
+    --app-text: #1f1f24;
+    --app-muted: #7a4a5a;
+    --panel-bg: #fdf5f7;
+    --panel-border: #e8b4c0;
+    --accent: #6E152E;
+    --accent-2: #a02048;
+    --accent-soft: #f8ccd6;
+    --sidebar-bg: #6E152E;
+    --sidebar-text: #f0e0e6;
+    --input-bg: #f5e0e6;
+    --input-text: #1a1a1a;
+    --file-tag-bg: #2c3e50;
+    --file-tag-text: #ecf0f1;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --app-bg: #111217;
+        --app-text: #f2edf0;
+        --app-muted: #d8a8b7;
+        --panel-bg: #1d1519;
+        --panel-border: #5b2637;
+        --accent: #b84a6b;
+        --accent-2: #7d203e;
+        --accent-soft: #ffd9e3;
+        --sidebar-bg: #2a0f1a;
+        --sidebar-text: #ffeaf0;
+        --input-bg: #2b2026;
+        --input-text: #f8f1f3;
+        --file-tag-bg: #324355;
+        --file-tag-text: #f1f5f9;
+    }
+}
+[data-testid="stAppViewContainer"] {
+    background: var(--app-bg);
+    color: var(--app-text);
+}
+[data-testid="stSidebar"] { background: var(--sidebar-bg); }
+[data-testid="stSidebar"] * { color: var(--sidebar-text) !important; }
 [data-testid="stSidebar"] input,
 [data-testid="stSidebar"] select,
 [data-testid="stSidebar"] textarea {
-    color: #1a1a1a !important;
-    background-color: #f5e0e6 !important;
+    color: var(--input-text) !important;
+    background-color: var(--input-bg) !important;
     border-radius: 6px !important;
 }
 [data-testid="stSidebar"] input::placeholder,
 [data-testid="stSidebar"] textarea::placeholder {
-    color: #9a6070 !important;
+    color: var(--app-muted) !important;
     opacity: 1 !important;
 }
 .hdr {
-    background:linear-gradient(90deg,#6E152E,#a02048);
+    background:linear-gradient(90deg,var(--accent),var(--accent-2));
     padding:14px 22px; border-radius:8px; margin-bottom:18px;
 }
 .hdr h1 { color:#fff; font-size:1.4rem; margin:0; font-weight:700; }
-.hdr p  { color:#f8ccd6; font-size:.87rem; margin:4px 0 0; }
+.hdr p  { color:var(--accent-soft); font-size:.87rem; margin:4px 0 0; }
 .ptitle {
-    background:#6E152E; color:#fff !important; font-weight:700;
+    background:var(--accent); color:#fff !important; font-weight:700;
     font-size:.88rem; padding:7px 14px;
     border-radius:6px 6px 0 0; margin-bottom:4px;
 }
 .kpi {
-    background:#fdf5f7; border:1px solid #e8b4c0;
+    background:var(--panel-bg); border:1px solid var(--panel-border);
     border-radius:8px; padding:10px 12px;
     text-align:center; margin-bottom:6px;
 }
-.kpi .v { font-size:1.2rem; font-weight:700; color:#6E152E; }
-.kpi .l { font-size:.72rem; color:#9a4060; }
+.kpi .v { font-size:1.2rem; font-weight:700; color:var(--accent); }
+.kpi .l { font-size:.72rem; color:var(--app-muted); }
 .tag-moneda {
-    background:#6E152E; color:#fff !important; padding:2px 8px;
+    background:var(--accent); color:#fff !important; padding:2px 8px;
     border-radius:4px; font-size:.78rem; font-weight:600;
 }
 .tag-file {
-    background:#2c3e50; color:#ecf0f1 !important; padding:2px 8px;
+    background:var(--file-tag-bg); color:var(--file-tag-text) !important; padding:2px 8px;
     border-radius:4px; font-size:.75rem; font-weight:600;
     margin-right:4px;
 }
@@ -202,6 +241,8 @@ _SS_DEFAULTS: dict = {
     "num_sec":         1,
     "sec_cfg":         [],
     "df":              None,
+    "editor_df":       None,
+    "editor_version":  0,
     "df_hash":         "",
     "extracted":       False,
     "bx_cache":        {},
@@ -220,16 +261,49 @@ def _md5(b: bytes) -> str:
     return hashlib.md5(b).hexdigest()
 
 
+def _is_blank_value(v) -> bool:
+    if v is None:
+        return True
+    try:
+        if bool(pd.isna(v)):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return isinstance(v, str) and not v.strip()
+
+
+def _normalize_editor_df(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Mantiene una sola forma de tabla para editor, KPIs y Excel."""
+    if df is None:
+        return pd.DataFrame(columns=_COLS)
+
+    clean = pd.DataFrame(df).copy()
+    private_cols = [c for c in clean.columns if str(c).startswith("_")]
+    clean = clean.drop(columns=private_cols, errors="ignore").reindex(columns=_COLS)
+
+    if clean.empty:
+        return clean.reset_index(drop=True)
+
+    editable_cols = [c for c in _COLS if c != "Diferencia final"]
+    blank_rows = clean[editable_cols].apply(
+        lambda row: all(_is_blank_value(v) for v in row),
+        axis=1,
+    )
+    return clean.loc[~blank_rows].reset_index(drop=True)
+
+
 def _df_hash(df: pd.DataFrame) -> str:
     """Hash determinista de un DataFrame para detección de cambios."""
     if df is None:
         return ""
+    df = _normalize_editor_df(df)
+    hash_df = df.astype(object).where(pd.notna(df), "")
     try:
         return hashlib.md5(
-            pd.util.hash_pandas_object(df, index=False).values.tobytes()
+            pd.util.hash_pandas_object(hash_df, index=False).values.tobytes()
         ).hexdigest()
     except Exception:
-        return hashlib.md5(df.to_csv(index=False).encode()).hexdigest()
+        return hashlib.md5(hash_df.to_csv(index=False).encode()).hexdigest()
 
 
 def _safe_f(v) -> Optional[float]:
@@ -432,17 +506,62 @@ def _banxico_tc(
 # RECALCULAR COLUMNAS DERIVADAS
 # ─────────────────────────────────────────────────────────────
 def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalcula 'Diferencia final' = Total - Anexo."""
-    if df is None or df.empty:
-        return df
-    df = df.copy()
-    tot = pd.to_numeric(df["Total con IVA"], errors="coerce")
-    anx = pd.to_numeric(df["Monto en Anexo Escrito"], errors="coerce")
-    mask = tot.notna() | anx.notna()
-    df.loc[mask, "Diferencia final"] = (
-        tot.fillna(0) - anx.fillna(0)
-    )[mask]
-    df.loc[~mask, "Diferencia final"] = None
+    """Recalcula columnas derivadas de forma idempotente."""
+    df = _normalize_editor_df(df)
+    for idx, row in df.iterrows():
+        qty = _safe_f(row.get("Cantidad"))
+        qty = qty if qty and qty > 0 else 1
+
+        unit = _safe_f(row.get("Precio Unitario"))
+        sub = _safe_f(row.get("Subtotal (Sin IVA)"))
+        iva = _safe_f(row.get("IVA 16%"))
+        tot = _safe_f(row.get("Total con IVA"))
+        anx = _safe_f(row.get("Monto en Anexo Escrito"))
+
+        iva_flag = (
+            str(row.get("(+ IVA)", "N/M") or "N/M")
+            .strip()
+            .lower()
+            .replace("\u00ed", "i")
+            .replace("\u00c3\u00ad", "i")
+        )
+        has_iva = iva_flag in {"si", "yes", "true", "1"}
+        no_iva = iva_flag in {"no", "n/m", "nm", "n.a.", "na", ""}
+
+        if sub is None and tot is not None and iva is not None:
+            sub = round(tot - iva, 2)
+
+        if unit is None:
+            if sub is not None:
+                unit = round(sub / qty, 2)
+            elif tot is not None:
+                base = (tot / 1.16) if has_iva else tot
+                unit = round(base / qty, 2)
+
+        if unit is not None:
+            sub = round(qty * unit, 2)
+
+        if sub is not None:
+            if has_iva:
+                iva = round(sub * 0.16, 2)
+                tot = round(sub + iva, 2)
+            elif no_iva:
+                iva = 0.0
+                tot = round(sub, 2)
+            else:
+                iva = round(iva, 2) if iva is not None else None
+                tot = round(sub + (iva or 0), 2)
+
+        df.at[idx, "Cantidad"] = int(qty) if float(qty).is_integer() else qty
+        df.at[idx, "Precio Unitario"] = unit
+        df.at[idx, "Subtotal (Sin IVA)"] = sub
+        df.at[idx, "IVA 16%"] = iva
+        df.at[idx, "Total con IVA"] = tot
+        df.at[idx, "Diferencia final"] = (
+            round((tot or 0) - (anx or 0), 2)
+            if tot is not None or anx is not None
+            else None
+        )
     return df
 
 
@@ -1049,6 +1168,12 @@ def _go_to(target: int) -> None:
     st.session_state.current_page = max(0, min(tp, target))
 
 
+def _request_rerun() -> None:
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
+
 # ─────────────────────────────────────────────────────────────
 # SIDEBAR (M1: multi-PDF)
 # ─────────────────────────────────────────────────────────────
@@ -1090,8 +1215,10 @@ with st.sidebar:
                 current_page=0,
                 extracted=False,
                 df=None,
+                editor_df=None,
                 df_hash="",
             )
+            st.session_state.editor_version += 1
 
         # Resumen de archivos cargados
         n_files = len(st.session_state.pdf_files)
@@ -1160,6 +1287,9 @@ with st.sidebar:
         st.session_state.num_sec = n
         st.session_state.extracted = False
         st.session_state.df = None
+        st.session_state.editor_df = None
+        st.session_state.df_hash = ""
+        st.session_state.editor_version += 1
 
     cfgs = list(st.session_state.sec_cfg)
     tp = max(st.session_state.total_pages, 1)
@@ -1335,7 +1465,9 @@ if run and st.session_state.pdf_combined:
     df_new = recalc_derived(df_new)
 
     st.session_state.df = df_new
+    st.session_state.editor_df = df_new.copy()
     st.session_state.df_hash = _df_hash(df_new)
+    st.session_state.editor_version += 1
     st.session_state.extracted = True
     st.session_state._rerun_guard = False
     st.success(f"✅ {len(rows)} sección(es) procesada(s).")
@@ -1490,12 +1622,22 @@ with col_R:
 
         kpi_slot = st.container()
 
+        if st.session_state.editor_df is None:
+            st.session_state.editor_df = df_cur.copy()
+        editor_key = f"data_editor_main_{st.session_state.editor_version}"
+
         edited_df = st.data_editor(
-            df_cur,
-            key="data_editor_main",
+            st.session_state.editor_df,
+            key=editor_key,
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
+            disabled=[
+                "Subtotal (Sin IVA)",
+                "IVA 16%",
+                "Total con IVA",
+                "Diferencia final",
+            ],
             column_config={
                 "Fecha": st.column_config.TextColumn(
                     "Fecha", width="small"
@@ -1546,17 +1688,16 @@ with col_R:
             },
         )
 
-        # P1 FIX: recalcular con guardia de reentrada
+        # P1 FIX: persistir snapshot recalculado antes de re-renderizar
         updated_df = recalc_derived(edited_df)
         new_hash = _df_hash(updated_df)
         if new_hash != st.session_state.df_hash:
             st.session_state.df = updated_df
+            st.session_state.editor_df = updated_df.copy()
             st.session_state.df_hash = new_hash
-            if not st.session_state.get("_rerun_guard"):
-                st.session_state._rerun_guard = True
-                st.rerun()
-            else:
-                st.session_state._rerun_guard = False
+            st.session_state.editor_version += 1
+            st.session_state._rerun_guard = False
+            _request_rerun()
         else:
             st.session_state._rerun_guard = False
 
@@ -1687,3 +1828,4 @@ with col_R:
                 )
             except Exception as exc:
                 st.error(f"Error generando plantilla: {exc}")
+                
