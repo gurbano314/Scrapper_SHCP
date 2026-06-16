@@ -1828,4 +1828,3 @@ with col_R:
                 )
             except Exception as exc:
                 st.error(f"Error generando plantilla: {exc}")
-                
