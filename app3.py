@@ -1,47 +1,41 @@
 # ============================================================
-# CONCILIADOR DE COTIZACIONES PDF  |  app.py  v4.1
+# CONCILIADOR DE COTIZACIONES PDF  |  app.py  v4.2
 # ============================================================
-# Correcciones sobre v4.0 (auditoría completa):
+# Novedades v4.2:
+#   M1  — Carga múltiple de PDFs: file_uploader con
+#         accept_multiple_files=True. Los PDFs se concatenan
+#         internamente en un solo documento (PyMuPDF) para
+#         paginación unificada. El visor muestra todos los PDFs
+#         como un libro continuo, con indicador de archivo fuente.
+#   M2  — Cada sección se vincula a un PDF específico o al
+#         documento consolidado, con rangos de página globales.
+#   M3  — Selector de PDF activo en el visor con indicador
+#         visual del archivo fuente por página.
+#   M4  — Descarga individual de cada PDF o del consolidado.
 #
-#   P0  — to_excel: corregido doble Workbook. Ahora wb=Workbook()
-#         seguido de ws=wb.active. Ya no se genera Excel vacío.
+# Correcciones heredadas de v4.1:
+#   P0  — to_excel: un solo Workbook (wb=Workbook(), ws=wb.active)
 #   P1  — data_editor + st.rerun: guardia de reentrada
-#         (_rerun_guard) para evitar bucle infinito por
-#         desincronización de hash en columnas disabled.
-#
-# Correcciones heredadas de v4.0:
-#   F1  — Race condition data_editor: detección real de cambios
-#         via hash MD5 sobre pd.util.hash_pandas_object.
-#   F2  — Navegación: una sola fuente de verdad (on_click+args).
-#   F3  — Caché de render: pdf_bytes fuera de la firma del cache.
-#   F4  — OCR síncrono optimizado: sin ThreadPoolExecutor,
-#         eliminando thread leaks y OOM en timeouts.
-#   F5  — Regex grupo 3: solo captura números con decimales .XX.
-#   F6  — Fórmulas Excel siempre escritas (nunca sobreescritas
-#         por valores), protegidas con IF(ISNUMBER(…)).
-#   F7  — Guard explícito sobre df_cur antes de KPIs.
-#   F8  — Triangulación IVA protegida con cota de cordura.
-#   F9  — cache_resource con max_entries=1 para OCR.
-#   F10 — Caché negativo en API Banxico: evita DDoS en fallos.
-#   F11 — Fila de totales Excel: rango s_xl..e_xl < tot_row.
-#   F12 — getvalue() en lugar de read() en file_uploader:
-#         previene amnesia de estado tras re-render de Streamlit.
-#   F13 — División por cero protegida en cálculo de P.U.
-#
-# Features restauradas (regresiones v4.0 → v3.0):
-#   R1  — Reconstrucción qty × pu ≈ total (line totals).
-#   R2  — Fallback de contexto monetario (_MONETARY_CTX).
-#   R3  — Checkbox "Calcular subtotal si falta" en sidebar.
-#   R4  — Sección "Plantilla vacía" para edición manual Excel.
-#   R5  — Botón "Descargar PDF" en el visor de documentos.
-#   R6  — Expander de alertas de extracción (⚠/OCR/inferido).
-#   R7  — Enlace a documentación SIE Banxico en sidebar.
-#
-# Funciones:
-#   ● API Banxico SIE: tipo de cambio USD/EUR/CAD por fecha.
-#   ● Plantilla Excel con fórmulas robustas en H/I/J/K.
-#   ● Opción "plantilla vacía" para edición manual en Excel.
-#   ● Moneda por sección + conversión automática a MXN.
+#   F1  — Detección cambios via hash MD5
+#   F2  — Navegación: una sola fuente de verdad (on_click+args)
+#   F3  — Caché de render: pdf_bytes fuera de la firma
+#   F4  — OCR síncrono optimizado (sin ThreadPoolExecutor)
+#   F5  — Regex grupo 3: solo decimales .XX
+#   F6  — Fórmulas Excel con IF(ISNUMBER(…))
+#   F7  — Guard explícito sobre df_cur antes de KPIs
+#   F8  — Triangulación IVA con cota de cordura
+#   F9  — cache_resource max_entries=1 para OCR
+#   F10 — Caché negativo en API Banxico
+#   F11 — Fila de totales Excel: rango correcto
+#   F12 — getvalue() en file_uploader
+#   F13 — División por cero protegida en P.U.
+#   R1  — Reconstrucción qty × pu ≈ total
+#   R2  — Fallback contexto monetario
+#   R3  — Checkbox "Calcular subtotal si falta"
+#   R4  — Plantilla vacía Excel
+#   R5  — Botón "Descargar PDF" en visor
+#   R6  — Alertas de extracción
+#   R7  — Enlace documentación Banxico
 # ============================================================
 
 import datetime
@@ -50,7 +44,7 @@ import io
 import re
 from typing import Optional
 
-import fitz                       # PyMuPDF
+import fitz  # PyMuPDF
 import numpy as np
 import openpyxl
 import pandas as pd
@@ -110,6 +104,11 @@ st.markdown(
     background:#6E152E; color:#fff !important; padding:2px 8px;
     border-radius:4px; font-size:.78rem; font-weight:600;
 }
+.tag-file {
+    background:#2c3e50; color:#ecf0f1 !important; padding:2px 8px;
+    border-radius:4px; font-size:.75rem; font-weight:600;
+    margin-right:4px;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -122,7 +121,6 @@ st.markdown(
 NATIVE_MIN_CHARS_PER_PAGE = 80
 MAX_PLAUSIBLE_MXN = 50_000_000
 
-# Banxico SIE – series de tipo de cambio FIX
 _BANXICO_SERIES = {
     "USD": "SF43718",
     "EUR": "SF46410",
@@ -130,7 +128,6 @@ _BANXICO_SERIES = {
 }
 _BANXICO_URL = "https://www.banxico.org.mx/SieAPIRest/service/v1"
 
-# Columnas del modelo de datos
 _COLS = [
     "Fecha",
     "Rubro",
@@ -148,7 +145,6 @@ _COLS = [
 ]
 _WIDTHS_COL = [12, 52, 5, 10, 7, 8, 16, 18, 17, 16, 18, 22, 48]
 
-# F5: grupo 3 exige decimales .XX → no captura folios/teléfonos
 _MONEY_RE = re.compile(
     r"\$\s*([\d,]+(?:\.\d{1,2})?)"
     r"|(?<!\d)([\d]{1,3}(?:,\d{3})+(?:\.\d{1,2})?)"
@@ -183,7 +179,6 @@ _MESES = {
     "sep": 9, "oct": 10, "nov": 11, "dic": 12,
 }
 
-# Formatos Excel
 _FMT_MONEY = (
     '_-"$ "* #,##0.00_-;'
     '\\-"$ "* #,##0.00_-;'
@@ -193,21 +188,25 @@ _FMT_DATE = "mm-dd-yy"
 
 
 # ─────────────────────────────────────────────────────────────
-# SESSION STATE — inicialización defensiva
+# SESSION STATE — inicialización defensiva (M1: multi-PDF)
 # ─────────────────────────────────────────────────────────────
 _SS_DEFAULTS: dict = {
-    "pdf_bytes":       None,   # bytes completos del PDF subido
-    "pdf_hash":        None,   # MD5 para invalidar caché de render
-    "total_pages":     0,      # nro. de páginas del PDF
-    "current_page":    0,      # índice de página visible (0-based)
-    "num_sec":         1,      # cantidad de secciones configuradas
-    "sec_cfg":         [],     # lista de dicts con configuración por sección
-    "df":              None,   # DataFrame con los datos extraídos/editados
-    "df_hash":         "",     # hash del DataFrame para detección de cambios
-    "extracted":       False,  # flag: ¿ya se ejecutó la extracción?
-    "bx_cache":        {},     # caché de tipos de cambio (incluye negativos)
-    "proyecto_nombre": "",     # nombre del proyecto para Excel
-    "_rerun_guard":    False,  # P1: guardia contra bucle infinito de reruns
+    # ── Multi-PDF (M1) ───────────────────────────────────────
+    "pdf_files":       [],     # lista de dicts: {name, bytes, hash, pages}
+    "pdf_combined":    None,   # bytes del PDF consolidado (todos concatenados)
+    "pdf_combined_hash": None, # MD5 del consolidado para caché de render
+    "total_pages":     0,      # total de páginas del consolidado
+    "page_map":        [],     # mapeo: [{"file_idx":0,"local_page":0,"name":"a.pdf"}, ...]
+    # ── Estado general ───────────────────────────────────────
+    "current_page":    0,
+    "num_sec":         1,
+    "sec_cfg":         [],
+    "df":              None,
+    "df_hash":         "",
+    "extracted":       False,
+    "bx_cache":        {},
+    "proyecto_nombre": "",
+    "_rerun_guard":    False,
 }
 for _k, _v in _SS_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
@@ -222,11 +221,7 @@ def _md5(b: bytes) -> str:
 
 
 def _df_hash(df: pd.DataFrame) -> str:
-    """Genera hash determinista de un DataFrame para detección de cambios.
-
-    Usa pd.util.hash_pandas_object para máxima velocidad.  Si falla
-    (ej. columnas con tipos mixtos), recurre a CSV serializado.
-    """
+    """Hash determinista de un DataFrame para detección de cambios."""
     if df is None:
         return ""
     try:
@@ -238,31 +233,18 @@ def _df_hash(df: pd.DataFrame) -> str:
 
 
 def _safe_f(v) -> Optional[float]:
-    """Convierte un valor arbitrario a float.
-
-    Retorna None si la conversión falla o el valor es NaN.
-    Maneja strings con comas como separadores de miles.
-    """
+    """Convierte un valor arbitrario a float. None si falla o NaN."""
     if v is None:
         return None
     try:
         f = float(str(v).replace(",", "").strip())
-        # NaN check (NaN != NaN)
         return None if f != f else f
     except (ValueError, TypeError):
         return None
 
 
 def _money(txt: str) -> Optional[float]:
-    """Extrae el primer valor monetario positivo de una cadena de texto.
-
-    Soporta tres formatos vía _MONEY_RE:
-      1. Con signo $: $1,234.56
-      2. Con comas obligatorias: 1,234.56
-      3. Con decimales obligatorios: 1234.56
-
-    Retorna None si no encuentra ningún valor válido.
-    """
+    """Extrae el primer valor monetario positivo de una cadena."""
     for m in _MONEY_RE.finditer(str(txt)):
         raw = m.group(1) or m.group(2) or m.group(3)
         if raw:
@@ -276,19 +258,10 @@ def _money(txt: str) -> Optional[float]:
 
 
 def _date(text: str) -> Optional[datetime.date]:
-    """Extrae la primera fecha válida de una cadena de texto.
-
-    Soporta tres formatos vía _DATE_RE:
-      1. Español: "15 de enero del 2024"
-      2. ISO-like: "2024-01-15", "2024/01/15"
-      3. Numérico: "15/01/2024", "15-01-24"
-
-    Retorna None si no encuentra ninguna fecha parseable.
-    """
+    """Extrae la primera fecha válida de una cadena de texto."""
     for m in _DATE_RE.finditer(text.lower()):
         g = m.groups()
         try:
-            # Formato 1: dd [de] mes [del] yyyy
             if g[0]:
                 mes_str = g[1].lower().strip()
                 mes_num = _MESES.get(mes_str) or _MESES.get(mes_str[:3])
@@ -299,10 +272,8 @@ def _date(text: str) -> Optional[datetime.date]:
                             break
                 if mes_num:
                     return datetime.date(int(g[2]), mes_num, int(g[0]))
-            # Formato 2: yyyy-mm-dd
             if g[3]:
                 return datetime.date(int(g[3]), int(g[4]), int(g[5]))
-            # Formato 3: dd/mm/yy(yy)
             if g[6]:
                 yr = int(g[8])
                 return datetime.date(
@@ -316,16 +287,54 @@ def _date(text: str) -> Optional[datetime.date]:
 
 
 # ─────────────────────────────────────────────────────────────
+# CONSOLIDACIÓN DE PDFs (M1)
+# ─────────────────────────────────────────────────────────────
+def _build_combined_pdf(
+    file_list: list[dict],
+) -> tuple[bytes, str, int, list[dict]]:
+    """Concatena múltiples PDFs en un solo documento PyMuPDF.
+
+    Args:
+        file_list: lista de dicts con keys 'name' y 'bytes'.
+
+    Returns:
+        (combined_bytes, combined_hash, total_pages, page_map)
+        page_map es una lista de dicts, uno por página global:
+          {"file_idx": int, "local_page": int, "name": str}
+    """
+    combined = fitz.open()
+    page_map: list[dict] = []
+
+    for file_idx, f_info in enumerate(file_list):
+        src = fitz.open(stream=f_info["bytes"], filetype="pdf")
+        n = len(src)
+        combined.insert_pdf(src)
+        for local_p in range(n):
+            page_map.append(
+                {
+                    "file_idx": file_idx,
+                    "local_page": local_p,
+                    "name": f_info["name"],
+                }
+            )
+        src.close()
+
+    buf = io.BytesIO()
+    combined.save(buf)
+    combined.close()
+    combined_bytes = buf.getvalue()
+    combined_hash = _md5(combined_bytes)
+    total_pages = len(page_map)
+
+    return combined_bytes, combined_hash, total_pages, page_map
+
+
+# ─────────────────────────────────────────────────────────────
 # OCR — ejecución síncrona optimizada (F4, F9)
 # ─────────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False, max_entries=1)
 def _get_ocr():
-    """Carga el motor OCR RapidOCR una sola vez y lo cachea.
-
-    F9: max_entries=1 previene múltiples instancias del modelo
-    ONNX en memoria simultáneamente.
-    Retorna None si RapidOCR no está instalado.
-    """
+    """Carga el motor OCR RapidOCR una sola vez y lo cachea."""
     try:
         from rapidocr_onnxruntime import RapidOCR
 
@@ -338,25 +347,12 @@ def _get_ocr():
 
 
 def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
-    """Ejecuta OCR sobre una página individual del PDF.
-
-    F4 (v4.1): Ejecución síncrona con matriz optimizada (1.0x)
-    en lugar de ThreadPoolExecutor, eliminando thread leaks
-    y riesgo de OOM por hilos zombie en timeout.
-
-    Args:
-        pdf_bytes: contenido completo del PDF en bytes.
-        idx:       índice de página (0-based).
-
-    Returns:
-        Texto reconocido por OCR, o cadena vacía si falla.
-    """
+    """Ejecuta OCR sobre una página individual del PDF."""
     ocr = _get_ocr()
     if ocr is None:
         return ""
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            # Matriz 1.0 vs 1.5: balance velocidad/precisión
             pix = doc[idx].get_pixmap(
                 matrix=fitz.Matrix(1.0, 1.0),
                 colorspace=fitz.csRGB,
@@ -379,23 +375,14 @@ def _ocr_page(pdf_bytes: bytes, idx: int) -> str:
 # ─────────────────────────────────────────────────────────────
 # VISOR DE PDF — renderizado con caché (F3)
 # ─────────────────────────────────────────────────────────────
-@st.cache_data(max_entries=120, show_spinner=False)
+@st.cache_data(max_entries=200, show_spinner=False)
 def _render(pdf_hash: str, idx: int) -> bytes:
-    """Renderiza una página del PDF como imagen PNG.
+    """Renderiza una página del PDF consolidado como PNG.
 
-    F3: pdf_bytes se obtiene de st.session_state (no de la firma
-    de caché) para evitar que Streamlit serialice megabytes de
-    PDF en cada cache key.  La invalidación se garantiza porque
-    pdf_hash cambia cuando cambia el archivo.
-
-    Args:
-        pdf_hash: MD5 del PDF (cache key para invalidación).
-        idx:      índice de página (0-based).
-
-    Returns:
-        Bytes de la imagen PNG renderizada.
+    F3: pdf_bytes se obtiene de session_state; la invalidación
+    se garantiza porque pdf_hash cambia cuando cambia el archivo.
     """
-    pdf_bytes = st.session_state.pdf_bytes
+    pdf_bytes = st.session_state.pdf_combined
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         pix = doc[idx].get_pixmap(
             matrix=fitz.Matrix(1.5, 1.5),
@@ -406,28 +393,12 @@ def _render(pdf_hash: str, idx: int) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────
-# API BANXICO SIE — tipo de cambio con caché negativo (F10)
+# API BANXICO SIE — con caché negativo (F10)
 # ─────────────────────────────────────────────────────────────
 def _banxico_tc(
     moneda: str, fecha: datetime.date, token: str
 ) -> Optional[float]:
-    """Consulta el tipo de cambio FIX del Banco de México.
-
-    Busca el TC más reciente en una ventana de 5 días hasta la
-    fecha solicitada (cubre fines de semana y feriados).
-
-    F10 (v4.1): Implementa caché negativo — si la petición falla,
-    almacena None en bx_cache para no reintentar la misma
-    fecha/moneda en cada rerender, evitando DDoS autoinfligido.
-
-    Args:
-        moneda: código ISO de la divisa ("USD", "EUR", "CAD").
-        fecha:  fecha de referencia para el tipo de cambio.
-        token:  token Bmx-Token de la API SIE.
-
-    Returns:
-        Tipo de cambio como float, o None si no disponible.
-    """
+    """Consulta el tipo de cambio FIX del Banco de México."""
     if moneda not in _BANXICO_SERIES or not token:
         return None
 
@@ -446,7 +417,6 @@ def _banxico_tc(
         resp.raise_for_status()
         datos = resp.json()["bmx"]["series"][0]["datos"]
         if not datos:
-            # Caché negativo: no reintentar esta combinación
             st.session_state.bx_cache[cache_key] = None
             return None
         tc = float(datos[-1]["dato"].replace(",", ""))
@@ -454,7 +424,6 @@ def _banxico_tc(
         return tc
     except Exception as exc:
         st.warning(f"Banxico ({moneda} · {fecha}): {exc}")
-        # Caché negativo: evita reintentos en cada rerender
         st.session_state.bx_cache[cache_key] = None
         return None
 
@@ -463,19 +432,7 @@ def _banxico_tc(
 # RECALCULAR COLUMNAS DERIVADAS
 # ─────────────────────────────────────────────────────────────
 def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalcula la columna 'Diferencia final' = Total - Anexo.
-
-    Opera sobre una copia defensiva del DataFrame.
-    Solo escribe en filas donde al menos uno de los dos valores
-    origen (Total, Anexo) es numérico, evitando llenar filas
-    vacías con ceros falsos.
-
-    Args:
-        df: DataFrame con las columnas _COLS.
-
-    Returns:
-        Copia del DataFrame con 'Diferencia final' actualizada.
-    """
+    """Recalcula 'Diferencia final' = Total - Anexo."""
     if df is None or df.empty:
         return df
     df = df.copy()
@@ -493,14 +450,7 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
 # MOTOR DE EXTRACCIÓN
 # ─────────────────────────────────────────────────────────────
 def _parse_space_table(text: str) -> list[dict]:
-    """Parsea líneas con formato tabular separado por espacios.
-
-    Busca el patrón: LINEA  CANTIDAD  UNIDAD  DESCRIPCIÓN  P.U.  TOTAL
-    capturado por _ITEM_RE.
-
-    Returns:
-        Lista de dicts con keys: qty, desc, pu, total.
-    """
+    """Parsea líneas con formato tabular separado por espacios."""
     items = []
     for line in text.splitlines():
         m = _ITEM_RE.match(line.strip())
@@ -529,25 +479,12 @@ def extract(
 ) -> dict:
     """Motor principal de extracción de montos desde PDF.
 
-    Estrategia de extracción en 5 niveles de prioridad:
+    Estrategia en 5 niveles:
       1. Tablas estructuradas (pdfplumber.extract_tables)
       2. Reconstrucción qty × pu ≈ total (R1: line totals)
-      3. Texto libre con keyword matching ("total", "subtotal")
+      3. Texto libre con keyword matching
       4. Patrón "es de $X" (precio directo)
       5. Fallback: máximo valor en contexto monetario (R2)
-
-    Args:
-        pdf_bytes: contenido completo del PDF.
-        label:     nombre/rubro de la sección.
-        p0:        página de inicio (1-based, inclusiva).
-        p1:        página de fin (1-based, inclusiva).
-        det_iva:   True para detectar/desglosar IVA.
-        calc_sub:  True para calcular subtotal desde total si falta.
-        moneda:    código ISO de moneda ("MXN", "USD", etc.).
-        bx_token:  token Banxico para conversión de divisas.
-
-    Returns:
-        Dict con todas las columnas de _COLS pobladas.
     """
     native_text = ""
     table_rows: list[list[str]] = []
@@ -561,7 +498,6 @@ def extract(
             pg = pdf.pages[i]
             txt = pg.extract_text() or ""
             native_text += "\n" + txt
-            # Tablas estructuradas
             for tbl in pg.extract_tables() or []:
                 if tbl:
                     table_rows.extend(
@@ -569,7 +505,6 @@ def extract(
                         for row in tbl
                         if row
                     )
-            # Tablas con formato de espacios
             for item in _parse_space_table(txt):
                 table_rows.append(
                     [
@@ -601,7 +536,6 @@ def extract(
     text = native_text
     tlow = text.lower()
 
-    # ── Variables de salida ───────────────────────────────────
     iva_f = (
         "Sí"
         if det_iva and re.search(r"\biva\b|16%|vat", tlow)
@@ -835,48 +769,33 @@ def extract(
 # EXPORTACIÓN EXCEL — P0 corregido, F6 fórmulas robustas
 # ─────────────────────────────────────────────────────────────
 def _side(style: str = "thin") -> Side:
-    """Crea un borde lateral con estilo y color negro."""
     return Side(style=style, color="000000")
 
 
 def _border(style: str = "thin") -> Border:
-    """Crea un borde completo (4 lados) con estilo uniforme."""
     s = _side(style)
     return Border(left=s, right=s, top=s, bottom=s)
 
 
 def _fill(rgb: str) -> PatternFill:
-    """Crea un relleno sólido con el color hexadecimal dado."""
     return PatternFill("solid", start_color=rgb, end_color=rgb)
 
 
 def to_excel(
     df: pd.DataFrame, nombre: str = "", blank: bool = False
 ) -> bytes:
-    """Genera un archivo Excel con formato profesional.
+    """Genera archivo Excel con formato profesional.
 
-    P0 (v4.1): Corregido — ahora usa un solo Workbook.
-    F6: Columnas H/I/J/K siempre contienen fórmulas Excel,
-        protegidas con IF(ISNUMBER(…)) para tolerar celdas vacías
-        sin generar #¡VALOR!.
-    F11: Fila de totales con rango correcto s_xl..e_xl < tot_row.
-
-    Args:
-        df:     DataFrame con los datos a exportar.
-        nombre: nombre del proyecto (título del libro).
-        blank:  True para generar plantilla vacía (solo fórmulas).
-
-    Returns:
-        Bytes del archivo .xlsx completo.
+    P0 FIX: un solo Workbook.
+    F6: fórmulas con IF(ISNUMBER(…)) para tolerar celdas vacías.
     """
     buf = io.BytesIO()
 
-    # P0 FIX: un solo Workbook, ws es su hoja activa
+    # P0 FIX: un solo Workbook
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = nombre[:31] if nombre else "Conciliación"
 
-    # ── Estilos ──────────────────────────────────────────────
     F_WHITE = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     F_HDR = Font(name="Calibri", size=11, bold=True, color="000000")
     F_DATA = Font(name="Calibri", size=11, color="000000")
@@ -898,11 +817,10 @@ def to_excel(
 
     n_rows = len(df)
 
-    # ── Anchos de columna ────────────────────────────────────
     for col_idx, width in enumerate(_WIDTHS_COL, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    # ── Fila 1: nombre del proyecto ──────────────────────────
+    # Fila 1: nombre del proyecto
     ws.row_dimensions[1].height = 27.75
     c = ws.cell(row=1, column=1, value=nombre or "")
     c.font = F_WHITE
@@ -914,7 +832,7 @@ def to_excel(
         cx.fill = FILL_ROW1
         cx.border = BD
 
-    # ── Fila 2: encabezados ──────────────────────────────────
+    # Fila 2: encabezados
     ws.row_dimensions[2].height = 21.75
     for ci, hdr in enumerate(_COLS, 1):
         c = ws.cell(row=2, column=ci, value=hdr)
@@ -923,10 +841,9 @@ def to_excel(
         c.border = BD
         c.alignment = AL_C
 
-    DS = 3  # DATA_START row
+    DS = 3
 
     def _money_cell(ws_, r, ci, val=None):
-        """Escribe una celda con formato monetario."""
         c_ = ws_.cell(row=r, column=ci, value=val)
         c_.number_format = _FMT_MONEY
         c_.font = F_DATA
@@ -934,7 +851,6 @@ def to_excel(
         c_.alignment = AL_R
         return c_
 
-    # ── Filas de datos ───────────────────────────────────────
     for i, (_, row) in enumerate(df.iterrows()):
         r = DS + i
         ws.row_dimensions[r].height = 18
@@ -1006,7 +922,7 @@ def to_excel(
         c.border = BD
         c.alignment = AL_C
 
-        # G: Precio Unitario (campo de entrada)
+        # G: Precio Unitario (input)
         pu_val = (
             None if blank else _safe_f(row.get("Precio Unitario"))
         )
@@ -1017,7 +933,7 @@ def to_excel(
             and not blank
         )
 
-        # H: Subtotal = F × G  (F6: fórmula con ISNUMBER guard)
+        # H: Subtotal = F × G  (F6: ISNUMBER guard)
         c = ws.cell(
             row=r, column=8,
             value=f'=IF(ISNUMBER(G{r}),F{r}*G{r},"")',
@@ -1060,7 +976,7 @@ def to_excel(
         c.border = BD
         c.alignment = AL_R
 
-        # K: Diferencia final = J - L
+        # K: Diferencia = J - L
         c = ws.cell(
             row=r, column=11,
             value=(
@@ -1073,7 +989,7 @@ def to_excel(
         c.border = BD
         c.alignment = AL_R
 
-        # L: Monto en Anexo Escrito (campo de entrada)
+        # L: Monto en Anexo Escrito (input)
         anx_val = (
             None
             if blank
@@ -1095,11 +1011,11 @@ def to_excel(
         c.border = BD
         c.alignment = AL_L
 
-    # ── Fila de totales (F11: rango s_xl..e_xl < tot_row) ────
+    # Fila de totales (F11)
     if n_rows > 0:
         tot_row = DS + n_rows
         s_xl = DS
-        e_xl = DS + n_rows - 1  # F11: siempre < tot_row
+        e_xl = DS + n_rows - 1
         ws.row_dimensions[tot_row].height = 18
 
         c = ws.cell(row=tot_row, column=1, value="TOTALES")
@@ -1125,7 +1041,7 @@ def to_excel(
 
 
 # ─────────────────────────────────────────────────────────────
-# CALLBACK NAVEGACIÓN (F2: una sola fuente de verdad)
+# CALLBACK NAVEGACIÓN (F2)
 # ─────────────────────────────────────────────────────────────
 def _go_to(target: int) -> None:
     """Mueve el visor a la página indicada, con clamping seguro."""
@@ -1134,30 +1050,68 @@ def _go_to(target: int) -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# SIDEBAR
+# SIDEBAR (M1: multi-PDF)
 # ─────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 📂 Documento PDF")
-    up = st.file_uploader("Sube el PDF de cotizaciones", type=["pdf"])
-    if up:
-        # F12: getvalue() en lugar de read() — inmutable, seguro
-        # ante múltiples rerenders de Streamlit
-        raw = up.getvalue()
-        h = _md5(raw)
-        if h != st.session_state.pdf_hash:
+    st.markdown("## 📂 Documentos PDF")
+    uploaded = st.file_uploader(
+        "Sube uno o varios PDFs de cotizaciones",
+        type=["pdf"],
+        accept_multiple_files=True,  # M1: multi-archivo
+    )
+
+    if uploaded:
+        # F12: getvalue() — inmutable frente a rerenders
+        new_files: list[dict] = []
+        for f in uploaded:
+            raw = f.getvalue()
+            h = _md5(raw)
+            with fitz.open(stream=raw, filetype="pdf") as doc:
+                n = len(doc)
+            new_files.append(
+                {"name": f.name, "bytes": raw, "hash": h, "pages": n}
+            )
+
+        # Detectar cambios comparando hashes concatenados
+        new_combo_hash = _md5(
+            "".join(fi["hash"] for fi in new_files).encode()
+        )
+        if new_combo_hash != st.session_state.pdf_combined_hash:
+            # Reconstruir PDF consolidado
+            combined_bytes, combined_hash, total_pages, page_map = (
+                _build_combined_pdf(new_files)
+            )
             st.session_state.update(
-                pdf_bytes=raw,
-                pdf_hash=h,
+                pdf_files=new_files,
+                pdf_combined=combined_bytes,
+                pdf_combined_hash=combined_hash,
+                total_pages=total_pages,
+                page_map=page_map,
+                current_page=0,
                 extracted=False,
                 df=None,
                 df_hash="",
-                current_page=0,
             )
-            with fitz.open(stream=raw, filetype="pdf") as d:
-                st.session_state.total_pages = len(d)
-        st.success(
-            f"✅ {st.session_state.total_pages} págs. cargadas"
-        )
+
+        # Resumen de archivos cargados
+        n_files = len(st.session_state.pdf_files)
+        tp_total = st.session_state.total_pages
+        if n_files == 1:
+            st.success(
+                f"✅ 1 archivo · {tp_total} págs."
+            )
+        else:
+            st.success(
+                f"✅ {n_files} archivos · {tp_total} págs. totales"
+            )
+            with st.expander("📄 Detalle de archivos"):
+                for idx, fi in enumerate(
+                    st.session_state.pdf_files
+                ):
+                    st.caption(
+                        f"**{idx + 1}.** {fi['name']}  —  "
+                        f"{fi['pages']} pág(s)."
+                    )
 
     st.markdown("---")
     st.markdown("### 🏷 Proyecto")
@@ -1166,7 +1120,7 @@ with st.sidebar:
         value=st.session_state.proyecto_nombre,
     )
 
-    # R7: enlace a documentación Banxico restaurado
+    # R7: enlace a documentación Banxico
     st.markdown("---")
     st.markdown("### 💱 Banxico – Tipo de Cambio")
     st.markdown(
@@ -1210,6 +1164,11 @@ with st.sidebar:
     cfgs = list(st.session_state.sec_cfg)
     tp = max(st.session_state.total_pages, 1)
 
+    # Generar opciones de PDF para el selectbox de cada sección
+    pdf_names = [
+        fi["name"] for fi in st.session_state.pdf_files
+    ] if st.session_state.pdf_files else []
+
     while len(cfgs) < n:
         i = len(cfgs) + 1
         cfgs.append(
@@ -1220,6 +1179,7 @@ with st.sidebar:
                 "det_iva": True,
                 "calc_sub": True,
                 "moneda": "MXN",
+                "pdf_idx": 0,  # M2: índice del PDF fuente
             }
         )
     cfgs = cfgs[:n]
@@ -1233,19 +1193,44 @@ with st.sidebar:
                 value=c["label"],
                 key=f"lb{i}",
             )
+
+            # M2: selector de PDF fuente (solo si hay >1 archivo)
+            if len(pdf_names) > 1:
+                safe_idx = min(
+                    c.get("pdf_idx", 0), len(pdf_names) - 1
+                )
+                c["pdf_idx"] = st.selectbox(
+                    "PDF fuente",
+                    range(len(pdf_names)),
+                    index=safe_idx,
+                    format_func=lambda x: pdf_names[x],
+                    key=f"pdf{i}",
+                )
+            elif pdf_names:
+                c["pdf_idx"] = 0
+            else:
+                c["pdf_idx"] = 0
+
+            # Páginas: rango LOCAL dentro del PDF seleccionado
+            if st.session_state.pdf_files:
+                fi = st.session_state.pdf_files[c["pdf_idx"]]
+                tp_local = max(fi["pages"], 1)
+            else:
+                tp_local = 1
+
             ca, cb = st.columns(2)
             c["p0"] = ca.number_input(
                 "Pág. Inicio",
                 1,
-                tp,
-                min(c["p0"], tp),
+                tp_local,
+                min(c["p0"], tp_local),
                 key=f"p0{i}",
             )
             c["p1"] = cb.number_input(
                 "Pág. Fin",
                 c["p0"],
-                tp,
-                max(min(c["p1"], tp), c["p0"]),
+                tp_local,
+                max(min(c["p1"], tp_local), c["p0"]),
                 key=f"p1{i}",
             )
             c["moneda"] = st.selectbox(
@@ -1261,10 +1246,10 @@ with st.sidebar:
                 value=c["det_iva"],
                 key=f"iv{i}",
             )
-            # R3: checkbox "Calcular subtotal" restaurado
+            # R3: restaurado
             c["calc_sub"] = st.checkbox(
                 "Calcular subtotal si falta",
-                value=c["calc_sub"],
+                value=c.get("calc_sub", True),
                 key=f"cs{i}",
             )
 
@@ -1273,7 +1258,7 @@ with st.sidebar:
     st.markdown("---")
     run = st.button(
         "🔍 Extraer Montos",
-        disabled=(st.session_state.pdf_bytes is None),
+        disabled=(st.session_state.pdf_combined is None),
         use_container_width=True,
         type="primary",
     )
@@ -1286,8 +1271,8 @@ st.markdown(
     """
 <div class="hdr">
   <h1>📋 Conciliador de Cotizaciones</h1>
-  <p>Extracción automática PDF · OCR adaptativo ·
-     Tipo de cambio Banxico · v4.1</p>
+  <p>Extracción automática PDF · Carga múltiple ·
+     OCR adaptativo · Tipo de cambio Banxico · v4.2</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -1295,9 +1280,9 @@ st.markdown(
 
 
 # ─────────────────────────────────────────────────────────────
-# PROCESO DE EXTRACCIÓN
+# PROCESO DE EXTRACCIÓN (M2: usa PDF individual por sección)
 # ─────────────────────────────────────────────────────────────
-if run and st.session_state.pdf_bytes:
+if run and st.session_state.pdf_combined:
     rows: list[dict] = []
     n_secs = st.session_state.num_sec
     bar = st.progress(0, text="Iniciando extracción…")
@@ -1306,14 +1291,22 @@ if run and st.session_state.pdf_bytes:
         bar.progress(
             (i + 0.3) / n_secs, text=f"🔍 {c['label']}…"
         )
+
+        # M2: seleccionar el PDF correcto para esta sección
+        pdf_idx = c.get("pdf_idx", 0)
+        if pdf_idx < len(st.session_state.pdf_files):
+            section_pdf_bytes = st.session_state.pdf_files[pdf_idx]["bytes"]
+        else:
+            section_pdf_bytes = st.session_state.pdf_combined
+
         try:
             row = extract(
-                st.session_state.pdf_bytes,
+                section_pdf_bytes,
                 c["label"],
                 c["p0"],
                 c["p1"],
                 c["det_iva"],
-                c["calc_sub"],
+                c.get("calc_sub", True),
                 moneda=c.get("moneda", "MXN"),
                 bx_token=bx_token,
             )
@@ -1348,8 +1341,10 @@ if run and st.session_state.pdf_bytes:
     st.success(f"✅ {len(rows)} sección(es) procesada(s).")
 
 
-if st.session_state.pdf_bytes is None:
-    st.info("Sube un PDF en la barra lateral para comenzar.")
+if st.session_state.pdf_combined is None:
+    st.info(
+        "Sube uno o varios PDFs en la barra lateral para comenzar."
+    )
     st.stop()
 
 
@@ -1359,7 +1354,7 @@ if st.session_state.pdf_bytes is None:
 col_L, col_R = st.columns(2, gap="medium")
 
 
-# ── VISOR DE DOCUMENTO ───────────────────────────────────────
+# ── VISOR DE DOCUMENTO (M3: indicador de archivo fuente) ─────
 with col_L:
     st.markdown(
         '<p class="ptitle">🔍 Visor de Documento</p>',
@@ -1400,9 +1395,31 @@ with col_L:
 
     st.caption(f"Página {cp + 1} de {tp}")
 
-    # Indicador de sección activa sobre la página visible
+    # M3: indicador de archivo fuente para la página actual
+    pm = st.session_state.page_map
+    if pm and cp < len(pm):
+        pg_info = pm[cp]
+        local_p = pg_info["local_page"] + 1
+        fname = pg_info["name"]
+        st.markdown(
+            f'<span class="tag-file">📁 {fname}</span> '
+            f'<span style="font-size:.8rem;color:#666">'
+            f"pág. local {local_p}</span>",
+            unsafe_allow_html=True,
+        )
+
+    # Indicador de sección activa (convertir a página global)
     for c_cfg in st.session_state.sec_cfg:
-        if c_cfg["p0"] <= cp + 1 <= c_cfg["p1"]:
+        # Calcular rango global de esta sección
+        pdf_idx = c_cfg.get("pdf_idx", 0)
+        # Offset global = suma de páginas de archivos anteriores
+        global_offset = sum(
+            fi["pages"]
+            for fi in st.session_state.pdf_files[:pdf_idx]
+        ) if st.session_state.pdf_files else 0
+        g_p0 = global_offset + c_cfg["p0"]
+        g_p1 = global_offset + c_cfg["p1"]
+        if g_p0 <= cp + 1 <= g_p1:
             st.markdown(
                 f'<span style="background:#6E152E;color:#fff;'
                 f"padding:3px 10px;border-radius:4px;"
@@ -1415,18 +1432,39 @@ with col_L:
 
     with st.spinner("Cargando…"):
         st.image(
-            _render(st.session_state.pdf_hash, cp),
+            _render(st.session_state.pdf_combined_hash, cp),
             use_container_width=True,
         )
 
-    # R5: botón "Descargar PDF" restaurado
-    st.download_button(
-        "📥 Descargar PDF",
-        data=st.session_state.pdf_bytes,
-        file_name="cotizaciones.pdf",
-        mime="application/pdf",
-        use_container_width=True,
-    )
+    # R5: descarga de PDF(s)
+    if len(st.session_state.pdf_files) == 1:
+        st.download_button(
+            "📥 Descargar PDF",
+            data=st.session_state.pdf_files[0]["bytes"],
+            file_name=st.session_state.pdf_files[0]["name"],
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    elif len(st.session_state.pdf_files) > 1:
+        # Descargar el consolidado
+        st.download_button(
+            "📥 Descargar PDF consolidado",
+            data=st.session_state.pdf_combined,
+            file_name="cotizaciones_consolidado.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+        # Descargar individuales
+        with st.expander("📄 Descargar archivos individuales"):
+            for idx, fi in enumerate(st.session_state.pdf_files):
+                st.download_button(
+                    f"📥 {fi['name']}",
+                    data=fi["bytes"],
+                    file_name=fi["name"],
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key=f"dl_pdf_{idx}",
+                )
 
 
 # ── EDITOR DE DATOS ──────────────────────────────────────────
@@ -1443,7 +1481,6 @@ with col_R:
         )
 
     else:
-        # F7: guard explícito sobre df_cur
         df_cur = st.session_state.df
         if df_cur is None or df_cur.empty:
             st.warning(
@@ -1451,7 +1488,6 @@ with col_R:
             )
             st.stop()
 
-        # Slot para KPIs (se renderiza antes del editor)
         kpi_slot = st.container()
 
         edited_df = st.data_editor(
@@ -1497,7 +1533,7 @@ with col_R:
                     "Diferencia",
                     format="$%.2f",
                     width="medium",
-                    disabled=True,  # Columna calculada, no editable
+                    disabled=True,
                 ),
                 "Monto en Anexo Escrito": (
                     st.column_config.NumberColumn(
@@ -1511,8 +1547,6 @@ with col_R:
         )
 
         # P1 FIX: recalcular con guardia de reentrada
-        # Evita bucle infinito si el hash difiere por columnas
-        # disabled que Streamlit no sincroniza correctamente.
         updated_df = recalc_derived(edited_df)
         new_hash = _df_hash(updated_df)
         if new_hash != st.session_state.df_hash:
@@ -1522,12 +1556,10 @@ with col_R:
                 st.session_state._rerun_guard = True
                 st.rerun()
             else:
-                # Segundo intento: no volver a disparar rerun
                 st.session_state._rerun_guard = False
         else:
             st.session_state._rerun_guard = False
 
-        # Usar df actualizado para KPIs
         df_cur = st.session_state.df
 
         # ── KPIs ─────────────────────────────────────────────
@@ -1561,7 +1593,7 @@ with col_R:
                     unsafe_allow_html=True,
                 )
 
-        # R6: alertas de extracción restauradas
+        # R6: alertas de extracción
         warn_rows = df_cur[
             df_cur["Observaciones"].str.contains(
                 "⚠|OCR|inferido", na=False
@@ -1603,7 +1635,7 @@ with col_R:
         except Exception as exc:
             st.error(f"Error generando Excel: {exc}")
 
-        # R4: sección "Plantilla vacía" restaurada
+        # R4: plantilla vacía
         with st.expander("📝 Edición manual directa en Excel"):
             st.info(
                 "Descarga la **plantilla vacía**: Subtotal, "
