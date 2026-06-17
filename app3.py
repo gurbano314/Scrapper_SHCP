@@ -15,7 +15,7 @@
 #
 # Correcciones heredadas de v4.1:
 #   P0  — to_excel: un solo Workbook (wb=Workbook(), ws=wb.active)
-#   P1  — data_editor + st.rerun: guardia de reentrada
+#   P1  — data_editor estable: snapshot propio sin rerun por edición
 #   F1  — Detección cambios via hash MD5
 #   F2  — Navegación: una sola fuente de verdad (on_click+args)
 #   F3  — Caché de render: pdf_bytes fuera de la firma
@@ -235,6 +235,7 @@ _SS_DEFAULTS: dict = {
     "pdf_combined":    None,   # bytes del PDF consolidado (todos concatenados)
     "pdf_combined_hash": None, # MD5 del consolidado para caché de render
     "total_pages":     0,      # total de páginas del consolidado
+    "pdf_upload_hash": None,
     "page_map":        [],     # mapeo: [{"file_idx":0,"local_page":0,"name":"a.pdf"}, ...]
     # ── Estado general ───────────────────────────────────────
     "current_page":    0,
@@ -459,7 +460,7 @@ def _render(pdf_hash: str, idx: int) -> bytes:
     pdf_bytes = st.session_state.pdf_combined
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         pix = doc[idx].get_pixmap(
-            matrix=fitz.Matrix(1.5, 1.5),
+            matrix=fitz.Matrix(1.0, 1.0),
             colorspace=fitz.csRGB,
             alpha=False,
         )
@@ -506,7 +507,7 @@ def _banxico_tc(
 # RECALCULAR COLUMNAS DERIVADAS
 # ─────────────────────────────────────────────────────────────
 def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalcula columnas derivadas de forma idempotente."""
+    """Recalcula solo lo necesario sin pisar ediciones manuales."""
     df = _normalize_editor_df(df)
     for idx, row in df.iterrows():
         qty = _safe_f(row.get("Cantidad"))
@@ -528,29 +529,17 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
         has_iva = iva_flag in {"si", "yes", "true", "1"}
         no_iva = iva_flag in {"no", "n/m", "nm", "n.a.", "na", ""}
 
-        if sub is None and tot is not None and iva is not None:
-            sub = round(tot - iva, 2)
-
-        if unit is None:
-            if sub is not None:
-                unit = round(sub / qty, 2)
-            elif tot is not None:
-                base = (tot / 1.16) if has_iva else tot
-                unit = round(base / qty, 2)
-
-        if unit is not None:
+        if sub is None and unit is not None:
             sub = round(qty * unit, 2)
 
-        if sub is not None:
-            if has_iva:
-                iva = round(sub * 0.16, 2)
-                tot = round(sub + iva, 2)
-            elif no_iva:
-                iva = 0.0
-                tot = round(sub, 2)
-            else:
-                iva = round(iva, 2) if iva is not None else None
-                tot = round(sub + (iva or 0), 2)
+        if iva is None and sub is not None and has_iva:
+            iva = round(sub * 0.16, 2)
+
+        if iva is None and sub is not None and no_iva:
+            iva = 0.0
+
+        if tot is None and sub is not None:
+            tot = round(sub + (iva or 0), 2)
 
         df.at[idx, "Cantidad"] = int(qty) if float(qty).is_integer() else qty
         df.at[idx, "Precio Unitario"] = unit
@@ -1048,14 +1037,23 @@ def to_excel(
         _money_cell(ws, r, 7, pu_val)
 
         has_iva = (
-            str(row.get("(+ IVA)", "N/M")).strip().lower() == "sí"
-            and not blank
+            str(row.get("(+ IVA)", "N/M"))
+            .strip()
+            .lower()
+            .replace("\u00ed", "i")
+            .replace("\u00c3\u00ad", "i")
+            == "si"
         )
 
-        # H: Subtotal = F × G  (F6: ISNUMBER guard)
+        # H: Subtotal
+        h_value = (
+            f'=IF(ISNUMBER(G{r}),F{r}*G{r},"")'
+            if blank
+            else _safe_f(row.get("Subtotal (Sin IVA)"))
+        )
         c = ws.cell(
             row=r, column=8,
-            value=f'=IF(ISNUMBER(G{r}),F{r}*G{r},"")',
+            value=h_value,
         )
         c.number_format = _FMT_MONEY
         c.font = F_DATA
@@ -1063,20 +1061,26 @@ def to_excel(
         c.alignment = AL_R
 
         # I: IVA 16%
-        if has_iva:
+        if blank and has_iva:
             c = ws.cell(
                 row=r, column=9,
                 value=f'=IF(ISNUMBER(H{r}),H{r}*0.16,"")',
             )
-        else:
+        elif blank:
             c = ws.cell(row=r, column=9, value=None)
+        else:
+            c = ws.cell(
+                row=r,
+                column=9,
+                value=_safe_f(row.get("IVA 16%")),
+            )
         c.number_format = _FMT_MONEY
         c.font = F_DATA
         c.border = BD
         c.alignment = AL_R
 
         # J: Total con IVA
-        if has_iva:
+        if blank and has_iva:
             c = ws.cell(
                 row=r, column=10,
                 value=(
@@ -1085,10 +1089,16 @@ def to_excel(
                     f',"")'
                 ),
             )
-        else:
+        elif blank:
             c = ws.cell(
                 row=r, column=10,
                 value=f'=IF(ISNUMBER(H{r}),H{r},"")',
+            )
+        else:
+            c = ws.cell(
+                row=r,
+                column=10,
+                value=_safe_f(row.get("Total con IVA")),
             )
         c.number_format = _FMT_MONEY
         c.font = F_DATA
@@ -1096,12 +1106,14 @@ def to_excel(
         c.alignment = AL_R
 
         # K: Diferencia = J - L
+        k_value = (
+            f'=IF(AND(ISNUMBER(J{r}),ISNUMBER(L{r})),J{r}-L{r},"")'
+            if blank
+            else _safe_f(row.get("Diferencia final"))
+        )
         c = ws.cell(
             row=r, column=11,
-            value=(
-                f"=IF(AND(ISNUMBER(J{r}),ISNUMBER(L{r})),"
-                f'J{r}-L{r},"")'
-            ),
+            value=k_value,
         )
         c.number_format = _FMT_MONEY
         c.font = F_DATA
@@ -1201,7 +1213,7 @@ with st.sidebar:
         new_combo_hash = _md5(
             "".join(fi["hash"] for fi in new_files).encode()
         )
-        if new_combo_hash != st.session_state.pdf_combined_hash:
+        if new_combo_hash != st.session_state.pdf_upload_hash:
             # Reconstruir PDF consolidado
             combined_bytes, combined_hash, total_pages, page_map = (
                 _build_combined_pdf(new_files)
@@ -1210,6 +1222,7 @@ with st.sidebar:
                 pdf_files=new_files,
                 pdf_combined=combined_bytes,
                 pdf_combined_hash=combined_hash,
+                pdf_upload_hash=new_combo_hash,
                 total_pages=total_pages,
                 page_map=page_map,
                 current_page=0,
@@ -1495,31 +1508,14 @@ with col_L:
 
     tp = st.session_state.total_pages
 
-    nav_p, nav_c, nav_n = st.columns([1, 4, 1])
-    nav_p.button(
-        "◀",
-        key="btn_prev",
-        use_container_width=True,
-        on_click=_go_to,
-        args=(st.session_state.current_page - 1,),
-    )
-    nav_n.button(
-        "▶",
-        key="btn_next",
-        use_container_width=True,
-        on_click=_go_to,
-        args=(st.session_state.current_page + 1,),
-    )
-
     cp = st.session_state.current_page
-    page_sel = nav_c.number_input(
+    page_sel = st.slider(
         "Página",
         min_value=1,
         max_value=tp,
         value=cp + 1,
         step=1,
-        label_visibility="collapsed",
-        key="nav_page_input",
+        key="nav_page_slider",
     )
     if page_sel - 1 != cp:
         st.session_state.current_page = page_sel - 1
@@ -1632,12 +1628,6 @@ with col_R:
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
-            disabled=[
-                "Subtotal (Sin IVA)",
-                "IVA 16%",
-                "Total con IVA",
-                "Diferencia final",
-            ],
             column_config={
                 "Fecha": st.column_config.TextColumn(
                     "Fecha", width="small"
@@ -1695,9 +1685,7 @@ with col_R:
             st.session_state.df = updated_df
             st.session_state.editor_df = updated_df.copy()
             st.session_state.df_hash = new_hash
-            st.session_state.editor_version += 1
             st.session_state._rerun_guard = False
-            _request_rerun()
         else:
             st.session_state._rerun_guard = False
 
