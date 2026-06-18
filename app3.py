@@ -429,7 +429,11 @@ def _banxico_tc(moneda: str, fecha: datetime.date, token: str) -> Optional[float
 # RECALCULAR COLUMNAS DERIVADAS
 # ─────────────────────────────────────────────────────────────
 def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Recalcula sub, iva y total de forma idempotente tras edición."""
+    """
+    Recalcula columnas derivadas de forma conservadora:
+    solo rellena campos vacíos (None/NaN), nunca sobreescribe
+    valores que el usuario ya proporcionó o editó manualmente.
+    """
     df = _normalize_editor_df(df)
     for idx, row in df.iterrows():
         qty = _safe_f(row.get("Cantidad"))
@@ -448,25 +452,28 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
         has_iva = iva_flag in {"si", "yes", "true", "1"}
         no_iva  = iva_flag in {"no", "n/m", "nm", "n.a.", "na", ""}
 
+        # ── Deducir valores faltantes (solo si son None) ──────
+        # sub desde tot - iva
         if sub is None and tot is not None and iva is not None:
             sub = round(tot - iva, 2)
+        # unit desde sub/qty o tot/qty
         if unit is None:
-            if sub is not None:
+            if sub is not None and qty > 0:
                 unit = round(sub / qty, 2)
-            elif tot is not None:
+            elif tot is not None and qty > 0:
                 base = (tot / 1.16) if has_iva else tot
                 unit = round(base / qty, 2)
-        if unit is not None:
+        # sub desde qty * unit (solo si sub sigue vacío)
+        if sub is None and unit is not None:
             sub = round(qty * unit, 2)
+        # iva y tot desde sub (solo si están vacíos)
         if sub is not None:
-            if has_iva:
-                iva = round(sub * 0.16, 2)
-                tot = round(sub + iva, 2)
-            elif no_iva:
-                iva = 0.0
-                tot = round(sub, 2)
-            else:
-                iva = round(iva, 2) if iva is not None else None
+            if iva is None:
+                if has_iva:
+                    iva = round(sub * 0.16, 2)
+                elif no_iva:
+                    iva = 0.0
+            if tot is None:
                 tot = round(sub + (iva or 0), 2)
 
         df.at[idx, "Cantidad"]          = int(qty) if float(qty).is_integer() else qty
@@ -551,7 +558,7 @@ def extract(
     text = native_text
     tlow = text.lower()
 
-    iva_f = "Sí" if det_iva and re.search(r"\biva\b|16%|vat", tlow) else "N/M"
+    iva_f = "Sí" if det_iva and re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat", tlow) else "N/M"
     tot = iva = sub = pu = fecha = None
     qty = 1
     obs_parts: list[str] = []
@@ -568,10 +575,10 @@ def extract(
         if re.search(r"\btotal\b", j) and not re.search(r"sub|parcial|acum", j):
             v = _money(s)
             if v and (tot is None or v > tot): tot = v
-        if re.search(r"\biva\b|16%|vat", j):
+        if re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat", j):
             v = _money(s)
             if v and (iva is None or v > iva): iva = v
-        if re.search(r"subtotal|sin\s*iva|importe\s*neto", j):
+        if re.search(r"sub\s*-?\s*total|sin\s*iva|importe\s*neto", j):
             v = _money(s)
             if v and (sub is None or v > sub): sub = v
 
@@ -686,15 +693,16 @@ def extract(
     # Subtotal e IVA por texto libre
     if sub is None:
         for ln in text.splitlines():
-            if re.search(r"subtotal|importe|sin\s*iva", ln, re.I) and \
-               not re.search(r"\btotal\b", ln.replace("subtotal", ""), re.I):
+            # Matchea "Subtotal", "Sub total", "Sub-total"
+            if re.search(r"sub\s*-?\s*total|importe|sin\s*iva", ln, re.I) and \
+               not re.search(r"(?<!sub\s)(?<!sub)\btotal\b", ln, re.I):
                 v = _money(ln)
                 if v and (tot is None or v <= tot):
                     sub = v; break
 
     if iva is None and iva_f == "Sí":
         for ln in text.splitlines():
-            if re.search(r"\biva\b|16%|vat|impuesto", ln, re.I):
+            if re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat|impuesto", ln, re.I):
                 v = _money(ln)
                 if v and (tot is None or v < tot):
                     iva = v; break
@@ -872,7 +880,7 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
         c = ws.cell(row=r, column=7, value=int(q) if q is not None else 1)
         c.number_format = "0.00"; c.font = F_DATA; c.border = BD; c.alignment = AL_C
 
-        # Col 8: Precio Unitario (input)
+        # Col 8: Precio Unitario (input del usuario)
         pu_val = None if blank else _safe_f(row.get("Precio Unitario"))
         _money_cell(ws, r, 8, pu_val)
 
@@ -881,37 +889,32 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
             .replace("\u00ed", "i").replace("\u00c3\u00ad", "i") == "si"
         )
 
-        # Col 9: Subtotal = G × H  (col 7 × col 8)
-        sub_val = f'=IF(ISNUMBER(H{r}),G{r}*H{r},"")' if blank else _safe_f(row.get("Subtotal (Sin IVA)"))
-        c = ws.cell(row=r, column=9, value=sub_val)
+        # Col 9: Subtotal = Cantidad × P.U.  (SIEMPRE fórmula)
+        # G=Cantidad, H=P.U. → I=Subtotal
+        c = ws.cell(row=r, column=9, value=f'=IF(ISNUMBER(H{r}),G{r}*H{r},"")')
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        # Col 10: IVA 16%
-        if blank and has_iva:
-            iva_val = f'=IF(ISNUMBER(I{r}),I{r}*0.16,"")'
-        elif blank:
-            iva_val = None
+        # Col 10: IVA 16% (SIEMPRE fórmula si tiene IVA)
+        if has_iva:
+            iva_formula = f'=IF(ISNUMBER(I{r}),I{r}*0.16,"")'
         else:
-            iva_val = _safe_f(row.get("IVA 16%"))
-        c = ws.cell(row=r, column=10, value=iva_val)
+            iva_formula = None  # Sin IVA → celda vacía
+        c = ws.cell(row=r, column=10, value=iva_formula)
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        # Col 11: Total con IVA
-        if blank and has_iva:
-            tot_val = f'=IF(ISNUMBER(I{r}),IF(ISNUMBER(J{r}),I{r}+J{r},I{r}),"")'
-        elif blank:
-            tot_val = f'=IF(ISNUMBER(I{r}),I{r},"")'
+        # Col 11: Total con IVA (SIEMPRE fórmula)
+        if has_iva:
+            tot_formula = f'=IF(ISNUMBER(I{r}),IF(ISNUMBER(J{r}),I{r}+J{r},I{r}),"")'
         else:
-            tot_val = _safe_f(row.get("Total con IVA"))
-        c = ws.cell(row=r, column=11, value=tot_val)
+            tot_formula = f'=IF(ISNUMBER(I{r}),I{r},"")'
+        c = ws.cell(row=r, column=11, value=tot_formula)
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        # Col 12: Diferencia = K(11) - M(13)
-        dif_val = f'=IF(AND(ISNUMBER(K{r}),ISNUMBER(M{r})),K{r}-M{r},"")' if blank else _safe_f(row.get("Diferencia final"))
-        c = ws.cell(row=r, column=12, value=dif_val)
+        # Col 12: Diferencia = Total - Anexo (SIEMPRE fórmula)
+        c = ws.cell(row=r, column=12, value=f'=IF(AND(ISNUMBER(K{r}),ISNUMBER(M{r})),K{r}-M{r},"")')
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        # Col 13: Monto en Anexo Escrito (input)
+        # Col 13: Monto en Anexo Escrito (input del usuario)
         anx_val = None if blank else _safe_f(row.get("Monto en Anexo Escrito"))
         c = _money_cell(ws, r, 13, anx_val); c.font = F_BOLD
 
@@ -1280,9 +1283,13 @@ with col_R:
 
         kpi_slot = st.container()
 
+        # Clave versionada: al cambiar editor_version, Streamlit
+        # descarta el widget viejo y crea uno nuevo con los datos frescos.
+        editor_key = f"data_editor_v{st.session_state.editor_version}"
+
         edited_df = st.data_editor(
             df_cur,
-            key="data_editor_main",
+            key=editor_key,
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
@@ -1308,11 +1315,13 @@ with col_R:
             },
         )
 
+        # Recalcular solo campos vacíos (no sobreescribe ediciones del usuario)
         updated_df = recalc_derived(edited_df)
         new_hash = _df_hash(updated_df)
         if new_hash != st.session_state.df_hash:
             st.session_state.df = updated_df
             st.session_state.df_hash = new_hash
+            # Solo hacer rerun una vez para reflejar los campos calculados
             if not st.session_state.get("_rerun_guard"):
                 st.session_state._rerun_guard = True
                 st.rerun()
