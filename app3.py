@@ -176,9 +176,14 @@ _ITEM_RE = re.compile(
 )
 _ES_DE_RE = re.compile(r"es\s+de\s+\$?\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 
-# V2: Blacklist ampliada — evita montos del presupuesto global o de resúmenes de anexos
+# V2+O2: Blacklist — evita montos del presupuesto global o de resúmenes de anexos
+# O2: "proyecto" reemplazado por patrones específicos para no filtrar
+#     cotizaciones legítimas que mencionan el proyecto por nombre.
 _BUDGET_EXCL = re.compile(
-    r"presupuestal|presupuesto\s+total|costo\s+total|proyecto|inversi[óo]n"
+    r"presupuestal|presupuesto\s+total"
+    r"|costo\s+(?:total\s+)?del?\s+proyecto"
+    r"|presupuesto\s+del?\s+proyecto"
+    r"|inversi[óo]n\s+total"
     r"|anexo\s*\d|aportante",
     re.IGNORECASE,
 )
@@ -519,8 +524,10 @@ def extract(
             native_text += "\n" + txt
             for tbl in pg.extract_tables() or []:
                 if tbl:
+                    # O6: limpiar saltos de línea internos en celdas de tabla
                     table_rows.extend(
-                        [str(c or "").strip() for c in row] for row in tbl if row
+                        [str(c or "").replace("\n", " ").strip() for c in row]
+                        for row in tbl if row
                     )
             for item in _parse_space_table(txt):
                 table_rows.append([
@@ -555,6 +562,9 @@ def extract(
     for row in table_rows:
         j = "   ".join(row).lower()
         s = "   ".join(row)
+        # O1: aplicar blacklist también en tablas (no solo en E4)
+        if _BUDGET_EXCL.search(j):
+            continue
         if re.search(r"\btotal\b", j) and not re.search(r"sub|parcial|acum", j):
             v = _money(s)
             if v and (tot is None or v > tot): tot = v
@@ -622,18 +632,25 @@ def extract(
                     obs_parts.append("Precio directo")
                     break
 
-    # ── V1: Cota de Cordura Proporcional ─────────────────────
-    # Descarta el total si es desproporcionado con respecto al subtotal
-    # o a la suma de las líneas individuales encontradas.
+    # ── V1+O3: Cota de Cordura Proporcional ───────────────────
+    # Descarta el total si es desproporcionado, EXCEPTO si es
+    # coherente con la fórmula sub + iva ≈ tot (tolerancia 2%).
     if tot is not None:
-        if sub is not None and tot > sub * 1.5:
-            obs_parts.append("⚠ Total descartado (desproporcionado vs subtotal)")
-            tot = None
-        elif valid_line_totals:
-            sum_lines = sum(valid_line_totals)
-            if sum_lines > 0 and tot > sum_lines * 1.5:
-                obs_parts.append("⚠ Total descartado (desproporcionado vs líneas)")
+        # O3: bypass si sub + iva ≈ tot (IVA coherente)
+        _iva_coherent = False
+        if sub is not None and iva is not None and tot > 0:
+            if abs(sub + iva - tot) / tot < 0.02:
+                _iva_coherent = True
+
+        if not _iva_coherent:
+            if sub is not None and tot > sub * 1.5:
+                obs_parts.append("⚠ Total descartado (desproporcionado vs subtotal)")
                 tot = None
+            elif valid_line_totals:
+                sum_lines = sum(valid_line_totals)
+                if sum_lines > 0 and tot > sum_lines * 1.5:
+                    obs_parts.append("⚠ Total descartado (desproporcionado vs líneas)")
+                    tot = None
 
     # ── Estrategia 4 (R2): fallback — máximo en contexto monetario ─
     if tot is None:
@@ -700,6 +717,11 @@ def extract(
         obs_parts.append("IVA desglosado")
     elif tot and iva and not sub:
         sub = round(tot - iva, 2)
+    # O5: caso tot + sub sin iva → deducir iva
+    elif tot and sub and not iva and iva_f == "Sí":
+        iva = round(tot - sub, 2)
+        if iva < 0:
+            iva = None  # incoherencia: sub > tot, no deducir
     elif sub and iva and not tot:
         tot = round(sub + iva, 2)
     elif calc_sub and sub and not iva and not tot and iva_f == "Sí":
