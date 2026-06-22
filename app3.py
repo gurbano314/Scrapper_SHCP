@@ -558,7 +558,7 @@ def extract(
     text = native_text
     tlow = text.lower()
 
-    iva_f = "Sí" if det_iva and re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat", tlow) else "N/M"
+    iva_f = "Sí" if det_iva and re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?\s*|16\s*%|vat", tlow) else "N/M"
     tot = iva = sub = pu = fecha = None
     qty = 1
     obs_parts: list[str] = []
