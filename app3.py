@@ -1,7 +1,7 @@
 # ============================================================
-# CONCILIADOR DE COTIZACIONES PDF  |  app.py  v5.1
+# CONCILIADOR DE COTIZACIONES PDF  |  app.py  v5.0
 # ============================================================
-# Novedades v5.1 (sobre v5.0):
+# Novedades v5.0 (sobre v4.3):
 #   V1  — Cota de Cordura Proporcional: si el "total" hallado
 #         es >1.5× el subtotal o la suma de líneas, se descarta.
 #   V2  — Blacklist ampliada (_BUDGET_EXCL): ignora líneas con
@@ -171,25 +171,28 @@ _DATE_RE = re.compile(
     r"|(\d{1,2})[\s.\-/]+(\d{1,2})[\s.\-/]+(\d{2,4})",
     re.IGNORECASE,
 )
-_GHOST_LINE_RE = re.compile(
-    r"^(?P<head>.*?)"
-    r"\$?\s*(?P<m1>[\d,]+\.\d{2})"
-    r"(?:\s+\$?\s*(?P<m2>[\d,]+\.\d{2}))?"
-    r"\s*$"
+# Formato rígido original (se conserva como fallback)
+_ITEM_RE = re.compile(
+    r"^\d+\s+(\d+)\s+\w+\s+(.+?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s*$"
 )
-_ES_DE_RE = re.compile(r"es\s+de\s+\$?\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
+# G1: Ghost Grid — detecta líneas con ≥1 monto monetario y texto descriptivo,
+# cubre tablas sin bordes nativos (agencias de viaje, cotizaciones italianas, etc.)
+_GHOST_MONEY_RE = re.compile(
+    r"(?:^|\s)\$?\s*([\d]{1,3}(?:,[\d]{3})*(?:\.\d{1,2}))"
+    r"|(?:^|\s)([\d]{1,9}\.\d{2})(?!\d)",
+    re.IGNORECASE,
+)
+# G2: IVA contextual — detecta si el IVA está incluido, es exento, o es separado
 _IVA_INCLUDED_RE = re.compile(
-    r"iva\s+(?:incluido|incluida)|(?:incluye|incluido|incluida)\s+iva|ya\s+incluye\s+iva",
+    r"iva\s+inclu[iy]|inclu[iy].*iva|ya\s+inclu|tarifa\s+inclu|con\s+iva\s+inclu|precio\s+(?:total|final)\s+con\s+iva",
     re.IGNORECASE,
 )
 _IVA_EXEMPT_RE = re.compile(
-    r"exent[oa]\s+de\s+iva|iva\s+exent[oa]|tasa\s*0\s*%|0\s*%\s+iva|no\s+aplica\s+iva|sin\s+iva",
+    r"exento|tasa\s+0|no\s+aplica\s+iva|sin\s+iva|iva\s*:\s*0|libre\s+de\s+iva"
+    r"|iva\s+no\s+aplica|no\s+causa\s+iva",
     re.IGNORECASE,
 )
-_IVA_SEPARATE_RE = re.compile(
-    r"\+\s*iva|iva\s*16\s*%|16\s*%\s*(?:de\s*)?iva|i\.?\s*v\.?\s*a\.?|vat|impuesto",
-    re.IGNORECASE,
-)
+_ES_DE_RE = re.compile(r"es\s+de\s+\$?\s*([\d,]+(?:\.\d{1,2})?)", re.IGNORECASE)
 
 # V2+O2: Blacklist — evita montos del presupuesto global o de resúmenes de anexos
 # O2: "proyecto" reemplazado por patrones específicos para no filtrar
@@ -303,96 +306,6 @@ def _safe_f(v) -> Optional[float]:
         return None
 
 
-def _money_values(txt: str) -> list[float]:
-    vals = []
-    for m in _MONEY_RE.finditer(txt or ""):
-        raw = m.group(1) or m.group(2) or m.group(3)
-        if not raw:
-            continue
-        val = _safe_f(raw.replace(",", ""))
-        if val is not None and val > 0:
-            vals.append(val)
-    return vals
-
-
-def _iva_state_from_value(value: object) -> str:
-    raw = str(value or "").strip().lower()
-    raw = (
-        raw.replace("í", "i").replace("á", "a").replace("é", "e")
-        .replace("ó", "o").replace("ú", "u")
-        .replace("ã­", "i").replace("ã¡", "a").replace("ã©", "e")
-        .replace("ã³", "o").replace("ãº", "u")
-    )
-    if raw in {"si", "sí", "yes", "true", "1"}:
-        return "si"
-    if raw in {"incluido", "iva incluido", "incluida"}:
-        return "incluido"
-    if raw in {"exento", "exenta", "tasa 0", "tasa cero"}:
-        return "exento"
-    if raw in {"no", "false", "0"}:
-        return "no"
-    return "nm"
-
-
-def _detect_iva_state(text: str, enabled: bool = True) -> str:
-    if not enabled:
-        return "N/M"
-    src = text or ""
-    if _IVA_EXEMPT_RE.search(src):
-        return "Exento"
-    if _IVA_INCLUDED_RE.search(src):
-        return "Incluido"
-    if _IVA_SEPARATE_RE.search(src):
-        return "Sí"
-    return "N/M"
-
-
-def _target_total(sub: float | None, iva: float | None, iva_flag: str) -> float | None:
-    state = _iva_state_from_value(iva_flag)
-    if sub is None:
-        return None
-    if iva is not None:
-        return round(sub + iva, 2)
-    if state in {"si", "incluido"}:
-        return round(sub * 1.16, 2)
-    if state in {"no", "exento"}:
-        return round(sub, 2)
-    return None
-
-
-def _select_best_total(
-    candidates: list[float],
-    sub: float | None,
-    iva: float | None,
-    iva_flag: str,
-    preferred: list[float] | None = None,
-) -> float | None:
-    clean = [round(v, 2) for v in candidates if v and 10.0 <= v <= MAX_PLAUSIBLE_MXN]
-    if not clean:
-        return None
-
-    target = _target_total(sub, iva, iva_flag)
-    if target:
-        return min(clean, key=lambda v: (abs(v - target), -v))
-
-    preferred_set = {round(v, 2) for v in preferred or []}
-    if preferred_set:
-        ranked = [v for v in clean if round(v, 2) in preferred_set]
-        if ranked:
-            return max(ranked)
-
-    return max(clean)
-
-
-def _item_row(item: dict) -> list[str]:
-    return [
-        str(item["qty"]),
-        item["desc"],
-        f"${item['pu']:,.2f}",
-        f"${item['total']:,.2f}",
-    ]
-
-
 def _money(txt: str) -> Optional[float]:
     for m in _MONEY_RE.finditer(str(txt)):
         raw = m.group(1) or m.group(2) or m.group(3)
@@ -496,7 +409,7 @@ def _render(pdf_hash: str, idx: int) -> bytes:
     pdf_bytes = st.session_state.pdf_combined
     with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
         pix = doc[idx].get_pixmap(
-            matrix=fitz.Matrix(1.2, 1.2), colorspace=fitz.csRGB, alpha=False
+            matrix=fitz.Matrix(1.5, 1.5), colorspace=fitz.csRGB, alpha=False
         )
         return pix.tobytes("png")
 
@@ -550,26 +463,23 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
         tot  = _safe_f(row.get("Total con IVA"))
         anx  = _safe_f(row.get("Monto en Anexo Escrito"))
 
-        iva_flag = _iva_state_from_value(row.get("(+ IVA)", "N/M"))
-        has_iva = iva_flag in {"si", "incluido"}
-        no_iva  = iva_flag in {"no", "exento"}
+        iva_flag = (
+            str(row.get("(+ IVA)", "N/M") or "N/M").strip()
+            .replace("\u00ed", "i").replace("\u00c3\u00ad", "i")
+        ).lower()
+        has_iva     = iva_flag in {"si", "yes", "true", "1", "s\u00ed"}
+        iva_incl    = iva_flag == "incluido"
+        iva_exento  = iva_flag in {"exento", "no", "n/m", "nm", "n.a.", "na", ""}
 
-        # ── Deducir valores faltantes (solo si son None) ──────
         # sub desde tot - iva
         if sub is None and tot is not None and iva is not None:
             sub = round(tot - iva, 2)
-        elif sub is None and tot is not None and iva_flag == "incluido":
-            sub = round(tot / 1.16, 2)
-            iva = round(tot - sub, 2) if iva is None else iva
-        elif sub is None and tot is not None and no_iva:
-            sub = round(tot, 2)
-            iva = 0.0 if iva is None else iva
         # unit desde sub/qty o tot/qty
         if unit is None:
             if sub is not None and qty > 0:
                 unit = round(sub / qty, 2)
             elif tot is not None and qty > 0:
-                base = (tot / 1.16) if iva_flag == "incluido" else tot
+                base = (tot / 1.16) if (has_iva or iva_incl) else tot
                 unit = round(base / qty, 2)
         # sub desde qty * unit (solo si sub sigue vacío)
         if sub is None and unit is not None:
@@ -579,10 +489,16 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
             if iva is None:
                 if has_iva:
                     iva = round(sub * 0.16, 2)
-                elif no_iva:
+                elif iva_incl:
+                    # Tot = sub (sub es el total con IVA ya incluido)
+                    iva = round(sub - sub / 1.16, 2)
+                elif iva_exento:
                     iva = 0.0
             if tot is None:
-                tot = round(sub + (iva or 0), 2)
+                if iva_incl and iva is not None:
+                    tot = round(sub / 1.16 + iva, 2)  # sub era total, recalcular
+                else:
+                    tot = round(sub + (iva or 0), 2)
 
         df.at[idx, "Cantidad"]          = int(qty) if float(qty).is_integer() else qty
         df.at[idx, "Precio Unitario"]   = unit
@@ -600,43 +516,72 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
 # MOTOR DE EXTRACCIÓN
 # ─────────────────────────────────────────────────────────────
 def _parse_space_table(text: str) -> list[dict]:
+    """
+    G1: Ghost Grid parser — extrae filas de cotización de texto libre.
+    Soporta 3 formatos:
+      [A] Rígido: ^Nº qty unidad desc  pu.00  total.00$   (_ITEM_RE)
+      [B] Dos montos: cualquier línea con ≥2 cifras monetarias
+      [C] Un monto:  línea descriptiva + 1 cifra (Total de línea)
+    Omite líneas cortas (<4 chars de descripción) y líneas de blacklist.
+    """
     items = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or _BUDGET_EXCL.search(line):
+    MIN_DESC = 4  # descripción mínima para no confundir con encabezados
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or _BUDGET_EXCL.search(stripped):
             continue
 
-        m = _GHOST_LINE_RE.match(line)
-        amounts = _money_values(line)
-        if not m or not amounts:
+        # Formato [A]: rígido original
+        m = _ITEM_RE.match(stripped)
+        if m:
+            qty_s, desc, pu_s, total_s = m.groups()
+            items.append({
+                "qty": int(qty_s), "desc": desc.strip(),
+                "pu":  float(pu_s.replace(",", "")),
+                "total": float(total_s.replace(",", "")),
+            })
             continue
 
-        qty = 1
-        desc_src = line
-        qty_m = re.match(r"^\s*(\d{1,4})\s+(?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])", line)
-        if qty_m:
-            qty = int(qty_m.group(1))
-            desc_src = line[qty_m.end():]
-
-        desc = _MONEY_RE.sub(" ", desc_src)
-        desc = re.sub(r"\s+", " ", desc).strip(" -:\t")
-        if len(re.sub(r"[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]", "", desc)) < 3:
+        # Formatos [B] y [C]: extrae todos los montos de la línea
+        montos = []
+        for m2 in _GHOST_MONEY_RE.finditer(stripped):
+            raw = m2.group(1) or m2.group(2)
+            if raw:
+                v = _safe_f(raw.replace(",", ""))
+                if v and v >= 1.0:
+                    montos.append(v)
+        if not montos:
             continue
 
-        if len(amounts) >= 2:
-            last_amounts = amounts[-2:]
-            pu = min(last_amounts)
-            total = max(last_amounts)
-        else:
-            total = amounts[0]
-            pu = round(total / qty, 2) if qty > 1 else total
+        # Separar descripción: todo el texto antes del primer monto
+        first_match = _GHOST_MONEY_RE.search(stripped)
+        desc_part = stripped[:first_match.start()].strip().rstrip(":-")
+        if len(desc_part) < MIN_DESC:
+            continue  # sin descripción válida → no es fila de producto
 
-        items.append({
-            "qty": qty,
-            "desc": desc,
-            "pu": round(pu, 2),
-            "total": round(total, 2),
-        })
+        # Detectar cantidad al inicio de la descripción (entero ≤ 9999)
+        qty_d = 1
+        desc_clean = desc_part
+        qty_m = re.match(r"^(\d{1,4})\s+(.+)", desc_part)
+        if qty_m and int(qty_m.group(1)) <= 9999:
+            qty_d = int(qty_m.group(1))
+            desc_clean = qty_m.group(2).strip()
+
+        if len(montos) >= 2:
+            # Formato [B]: dos montos → menor=PU, mayor=Total
+            montos_sorted = sorted(montos)
+            pu_v   = montos_sorted[0]
+            tot_v  = montos_sorted[-1]
+            # Validar que sea coherente (qty × pu ≈ tot, tolerancia 5%)
+            tol = max(0.5, tot_v * 0.05)
+            if abs(qty_d * pu_v - tot_v) <= tol or len(montos) == 2:
+                items.append({"qty": qty_d, "desc": desc_clean,
+                               "pu": pu_v, "total": tot_v})
+        elif len(montos) == 1:
+            # Formato [C]: un monto → es el total de línea
+            items.append({"qty": qty_d, "desc": desc_clean,
+                           "pu": montos[0] / qty_d, "total": montos[0]})
     return items
 
 
@@ -655,7 +600,6 @@ def extract(
     native_text = ""
     table_rows: list[list[str]] = []
     ocr_used = False
-    ocr_reason = ""
 
     # Estrategia 1 & 2: texto nativo + tablas
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -673,44 +617,59 @@ def extract(
                         for row in tbl if row
                     )
             for item in _parse_space_table(txt):
-                table_rows.append(_item_row(item))
+                table_rows.append([
+                    str(item["qty"]), item["desc"],
+                    f"${item['pu']:,.2f}", f"${item['total']:,.2f}",
+                ])
 
     pages_count = max(len(pr), 1)
-    native_too_short = len(native_text.strip()) < NATIVE_MIN_CHARS_PER_PAGE * pages_count
-    native_has_finance = bool(_MONETARY_CTX.search(native_text) and _money_values(native_text))
-    needs_selective_ocr = not native_too_short and not table_rows and not native_has_finance
-    if native_too_short or needs_selective_ocr:
+    if len(native_text.strip()) < NATIVE_MIN_CHARS_PER_PAGE * pages_count:
         ocr_used = True
-        ocr_reason = "OCR" if native_too_short else "OCR selectivo"
         for i in pr:
             o_txt = _ocr_page(pdf_bytes, i)
             if o_txt:
                 native_text += "\n" + o_txt
                 for item in _parse_space_table(o_txt):
-                    table_rows.append(_item_row(item))
+                    table_rows.append([
+                        str(item["qty"]), item["desc"],
+                        f"${item['pu']:,.2f}", f"${item['total']:,.2f}",
+                    ])
 
     text = native_text
     tlow = text.lower()
 
-    iva_f = _detect_iva_state(tlow, det_iva)
+    # ── G2: IVA Contextual — detectar tipo de IVA (4 estados) ────
+    iva_mention = re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat", tlow)
+    if not det_iva or not iva_mention:
+        iva_f = "N/M"
+    elif _IVA_EXEMPT_RE.search(text):    # exento / tasa 0 / no aplica
+        iva_f = "Exento"
+    elif _IVA_INCLUDED_RE.search(text):  # ya incluido en tarifa
+        iva_f = "Incluido"
+    else:
+        iva_f = "Sí"                      # IVA separado 16% (caso normal)
+
     tot = iva = sub = pu = fecha = None
     qty = 1
     obs_parts: list[str] = []
     if ocr_used:
-        obs_parts.append(ocr_reason or "OCR")
+        obs_parts.append("OCR")
+    if iva_f in ("Exento", "Incluido"):
+        obs_parts.append(f"IVA {iva_f}")
 
-    # ── Estrategia 1: tablas estructuradas ───────────────────
-    total_candidates: list[float] = []
+    # ── Estrategia 1: tablas estructuradas (G4: acumula candidatos) ──
+    tot_candidates: list[float] = []
     for row in table_rows:
         j = "   ".join(row).lower()
         s = "   ".join(row)
-        # O1: aplicar blacklist también en tablas (no solo en E4)
+        # O1: aplicar blacklist también en tablas
         if _BUDGET_EXCL.search(j):
             continue
         if re.search(r"\btotal\b", j) and not re.search(r"sub|parcial|acum", j):
             v = _money(s)
             if v:
-                total_candidates.append(v)
+                tot_candidates.append(v)
+                if tot is None or v > tot: tot = v
         if re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat", j):
             v = _money(s)
             if v and (iva is None or v > iva): iva = v
@@ -718,8 +677,14 @@ def extract(
             v = _money(s)
             if v and (sub is None or v > sub): sub = v
 
-    if total_candidates:
-        tot = _select_best_total(total_candidates, sub, iva, iva_f)
+    # G4: con subtotal conocido y múltiples candidatos, preferir el coherente
+    if sub is not None and len(tot_candidates) > 1:
+        factor = 1.0 if iva_f in ("Exento", "N/M") else 1.16
+        target = sub * factor
+        best = min(tot_candidates, key=lambda x: abs(x - target))
+        if abs(best - target) / max(target, 1) <= 0.20:
+            tot = best
+            obs_parts.append("Total seleccionado por coherencia")
 
     # ── Estrategia 2 (R1): triangulación qty × pu ≈ total ────
     valid_line_totals: list[float] = []
@@ -755,28 +720,68 @@ def extract(
         tot = round(sum(valid_line_totals), 2)
         obs_parts.append("Total por líneas")
 
+    # ── G5: OCR selectivo para PDFs mixtos ────────────────────
+    # Si hay texto nativo suficiente pero no se hallaron tablas ni montos,
+    # el PDF puede tener tablas como imagen → forzar OCR de todas las páginas.
+    if not ocr_used and not table_rows and tot is None and sub is None:
+        ocr_used = True
+        for i in pr:
+            o_txt = _ocr_page(pdf_bytes, i)
+            if o_txt:
+                native_text += "\n" + o_txt
+                for item in _parse_space_table(o_txt):
+                    table_rows.append([
+                        str(item["qty"]), item["desc"],
+                        f"${item['pu']:,.2f}", f"${item['total']:,.2f}",
+                    ])
+        if ocr_used and table_rows:
+            text = native_text
+            tlow = text.lower()
+            obs_parts.append("OCR-Selectivo (tabla imagen)")
+            # Re-ejecutar Estrategia 1 sobre el nuevo corpus
+            for row in table_rows:
+                j = "   ".join(row).lower()
+                s = "   ".join(row)
+                if _BUDGET_EXCL.search(j): continue
+                if re.search(r"\btotal\b", j) and not re.search(r"sub|parcial|acum", j):
+                    v = _money(s)
+                    if v and (tot is None or v > tot): tot = v
+                if re.search(r"sub\s*-?\s*total|sin\s*iva|importe\s*neto", j):
+                    v = _money(s)
+                    if v and (sub is None or v > sub): sub = v
+
     # ── Estrategia 3: fecha y total por texto libre ───────────
     for ln in text.splitlines():
         if fecha is None:
             d = _date(ln)
             if d: fecha = d
 
-    text_total_candidates: list[float] = []
     if tot is None:
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        for idx, ln in enumerate(lines):
-            if _BUDGET_EXCL.search(ln):
-                continue
+        for ln in text.splitlines():
+            if _BUDGET_EXCL.search(ln): continue
             if re.search(r"\btotal\b", ln, re.I) and not re.search(r"sub|parcial|acum", ln, re.I):
-                vals = _money_values(ln)
-                if vals:
-                    text_total_candidates.extend(vals)
-                elif idx + 1 < len(lines):
-                    next_vals = _money_values(lines[idx + 1])
-                    if next_vals:
-                        text_total_candidates.extend(next_vals)
-        if text_total_candidates:
-            tot = _select_best_total(text_total_candidates, sub, iva, iva_f, valid_line_totals)
+                v = _money(ln)
+                if v and (tot is None or v > tot): tot = v
+
+    # ── G3: Pares label:valor en líneas adyacentes ────────────
+    # Detecta el patrón: línea N = "Total:", línea N+1 = "$ 999,000.00"
+    if tot is None or sub is None:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        for i_ln, ln_a in enumerate(lines[:-1]):
+            ln_b = lines[i_ln + 1]
+            if _BUDGET_EXCL.search(ln_a): continue
+            # La línea A tiene solo una etiqueta (sin monto propio)
+            if _money(ln_a) is not None: continue
+            v = _money(ln_b)
+            if v is None: continue
+            ln_a_low = ln_a.lower()
+            if tot is None and re.search(r"\btotal\b", ln_a_low) and \
+               not re.search(r"sub|parcial|acum", ln_a_low):
+                tot = v
+                obs_parts.append("Total (línea adyacente)")
+            elif sub is None and re.search(r"sub\s*-?\s*total|importe|sin\s*iva", ln_a_low):
+                sub = v
+                obs_parts.append("Subtotal (línea adyacente)")
 
     # ── Estrategia 3.5: "es de $X" ────────────────────────────
     if tot is None:
@@ -815,9 +820,15 @@ def extract(
         for ln in text.splitlines():
             if _BUDGET_EXCL.search(ln): continue  # V2: blacklist
             if not _MONETARY_CTX.search(ln): continue
-            for v in _money_values(ln):
-                if 10.0 <= v <= MAX_PLAUSIBLE_MXN:
-                    all_vals.append(v)
+            for m in _MONEY_RE.finditer(ln):
+                raw = m.group(1) or m.group(2) or m.group(3)
+                if raw:
+                    try:
+                        v = float(raw.replace(",", ""))
+                        if 10.0 <= v <= MAX_PLAUSIBLE_MXN:
+                            all_vals.append(v)
+                    except ValueError:
+                        pass
         if all_vals:
             # V3: también aplicar cota proporcional en el fallback
             if sub is not None:
@@ -826,7 +837,7 @@ def extract(
                 sum_lines = sum(valid_line_totals)
                 all_vals = [v for v in all_vals if v <= sum_lines * 1.5]
             if all_vals:
-                tot = _select_best_total(all_vals, sub, iva, iva_f, valid_line_totals)
+                tot = max(all_vals)
                 obs_parts.append("Total inferido (máx. validado)")
 
     # Límite global de cordura
@@ -844,20 +855,15 @@ def extract(
                 if v and (tot is None or v <= tot):
                     sub = v; break
 
-    if iva is None and _iva_state_from_value(iva_f) == "si":
+    if iva is None and iva_f == "Sí":
         for ln in text.splitlines():
             if re.search(r"\biva\b|i\.?\s*v\.?\s*a\.?|16\s*%|vat|impuesto", ln, re.I):
                 v = _money(ln)
                 if v and (tot is None or v < tot):
                     iva = v; break
 
-    coherence_pool = total_candidates + text_total_candidates
-    if coherence_pool and sub is not None:
-        coherent_tot = _select_best_total(coherence_pool, sub, iva, iva_f, valid_line_totals)
-        if coherent_tot is not None:
-            tot = coherent_tot
-
-    # Cantidad y P.U. de tablas
+    # Cantidad y P.U. de tablas (toma la fila con mayor total de línea)
+    best_row_total = 0.0
     for row in table_rows:
         row_str = " ".join(str(c) for c in row)
         nums_: list[float] = []
@@ -865,35 +871,50 @@ def extract(
             n_val = _safe_f(t)
             if n_val is not None: nums_.append(n_val)
         if len(nums_) >= 2 and 1 <= nums_[0] <= 9999:
-            qty = int(nums_[0])
-            pu = nums_[-2] if len(nums_) > 2 else nums_[-1]
+            row_tot = nums_[-1]
+            if row_tot > best_row_total:
+                best_row_total = row_tot
+                qty = int(nums_[0])
+                pu = nums_[-2] if len(nums_) > 2 else nums_[-1]
 
-    # Triangulación final
-    iva_state = _iva_state_from_value(iva_f)
-    if tot is not None and sub is None and iva is None and iva_state in {"si", "incluido"}:
-        sub = round(tot / 1.16, 2)
-        iva = round(tot - sub, 2)
-        obs_parts.append("IVA incluido desglosado" if iva_state == "incluido" else "IVA desglosado")
-    elif tot is not None and sub is None and iva is None and iva_state in {"no", "exento"}:
-        sub = round(tot, 2)
+    # ── Triangulación final (G2: 4 estados de IVA) ───────────
+    if iva_f == "Incluido":
+        # El total ya contiene IVA → descomponer
+        if tot and not sub:
+            sub = round(tot / 1.16, 2)
+            iva = round(tot - sub, 2)
+            obs_parts.append("IVA descompuesto del total")
+        elif sub and not tot:
+            iva = round(sub * 0.16 / 1.16, 2)  # si sub es el total real
+            tot = sub
+            sub = round(tot / 1.16, 2)
+            iva = round(tot - sub, 2)
+    elif iva_f == "Exento":
+        # Sin IVA: sub = tot, iva = 0
+        if tot and not sub: sub = tot
+        elif sub and not tot: tot = sub
         iva = 0.0
-    elif tot is not None and iva is not None and sub is None:
-        sub = round(tot - iva, 2)
-    # O5: caso tot + sub sin iva → deducir iva
-    elif tot is not None and sub is not None and iva is None and iva_state in {"si", "incluido"}:
-        iva = round(tot - sub, 2)
-        if iva < 0:
-            iva = None  # incoherencia: sub > tot, no deducir
-    elif tot is not None and sub is not None and iva is None and iva_state in {"no", "exento"}:
-        iva = 0.0
-    elif sub is not None and iva is not None and tot is None:
-        tot = round(sub + iva, 2)
-    elif calc_sub and sub is not None and iva is None and tot is None and iva_state in {"si", "incluido"}:
-        iva = round(sub * 0.16, 2)
-        tot = round(sub + iva, 2)
-    elif calc_sub and sub is not None and iva is None and tot is None and iva_state in {"no", "exento"}:
-        iva = 0.0
-        tot = round(sub, 2)
+    elif iva_f == "Sí":
+        # IVA separado (caso normal)
+        if tot and not sub and not iva:
+            sub = round(tot / 1.16, 2)
+            iva = round(tot - sub, 2)
+            obs_parts.append("IVA desglosado")
+        elif tot and iva and not sub:
+            sub = round(tot - iva, 2)
+        elif tot and sub and not iva:
+            iva = round(tot - sub, 2)
+            if iva < 0: iva = None
+        elif sub and iva and not tot:
+            tot = round(sub + iva, 2)
+        elif calc_sub and sub and not iva and not tot:
+            iva = round(sub * 0.16, 2)
+            tot = round(sub + iva, 2)
+    else:  # N/M
+        if tot and iva and not sub:
+            sub = round(tot - iva, 2)
+        elif sub and iva and not tot:
+            tot = round(sub + iva, 2)
 
     if pu is None and sub is not None and qty > 0:
         pu = round(sub / qty, 2)
@@ -1043,7 +1064,10 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
         pu_val = None if blank else _safe_f(row.get("Precio Unitario"))
         _money_cell(ws, r, 8, pu_val)
 
-        has_iva = _iva_state_from_value(row.get("(+ IVA)", "N/M")) in {"si", "incluido"}
+        has_iva = (
+            str(row.get("(+ IVA)", "N/M")).strip().lower()
+            .replace("\u00ed", "i").replace("\u00c3\u00ad", "i") == "si"
+        )
 
         # Col 9: Subtotal = Cantidad × P.U.  (SIEMPRE fórmula)
         # G=Cantidad, H=P.U. → I=Subtotal
@@ -1101,6 +1125,13 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
 # ─────────────────────────────────────────────────────────────
 # CALLBACKS DE NAVEGACIÓN (N1)
 # ─────────────────────────────────────────────────────────────
+def _go_to(target: int) -> None:
+    """Mueve el visor a la página indicada y sincroniza el widget numérico."""
+    tp = max(st.session_state.total_pages - 1, 0)
+    target = max(0, min(tp, target))
+    st.session_state.current_page = target
+    st.session_state.nav_page_input = target + 1
+
 def _on_page_input() -> None:
     """Callback del number_input de página; actualiza current_page."""
     target = st.session_state.nav_page_input - 1
@@ -1262,7 +1293,7 @@ with st.sidebar:
 # ─────────────────────────────────────────────────────────────
 st.markdown(
     '<div class="hdr"><h1>📋 Conciliador de Cotizaciones</h1>'
-    '<p>Extracción automática PDF · Carga múltiple · Cota de Cordura · v5.1</p></div>',
+    '<p>Extracción automática PDF · Carga múltiple · Cota de Cordura · v5.0</p></div>',
     unsafe_allow_html=True,
 )
 
@@ -1314,8 +1345,6 @@ if run and st.session_state.pdf_combined:
     df_new = pd.DataFrame(rows).reindex(columns=_COLS)
     df_new = recalc_derived(df_new)
     st.session_state.df = df_new
-    st.session_state.editor_df = df_new.copy()
-    st.session_state.editor_version += 1
     st.session_state.df_hash = _df_hash(df_new)
     st.session_state.extracted = True
     st.session_state._rerun_guard = False
@@ -1338,8 +1367,17 @@ with col_L:
     st.markdown('<p class="ptitle">🔍 Visor de Documento</p>', unsafe_allow_html=True)
     tp = st.session_state.total_pages
 
+    nav_p, nav_c, nav_n = st.columns([1, 4, 1])
+    nav_p.button(
+        "◀", key="btn_prev", use_container_width=True,
+        on_click=_go_to, args=(st.session_state.current_page - 1,),
+    )
+    nav_n.button(
+        "▶", key="btn_next", use_container_width=True,
+        on_click=_go_to, args=(st.session_state.current_page + 1,),
+    )
     # N1: number_input vinculado a nav_page_input; on_change sincroniza current_page
-    st.number_input(
+    nav_c.number_input(
         "Página", min_value=1, max_value=tp, step=1,
         label_visibility="collapsed",
         key="nav_page_input",
@@ -1418,7 +1456,7 @@ with col_R:
     if not st.session_state.extracted or st.session_state.df is None:
         st.info("Configura las secciones y presiona **🔍 Extraer Montos**.")
     else:
-        df_cur = st.session_state.editor_df if st.session_state.editor_df is not None else st.session_state.df
+        df_cur = st.session_state.df
         if df_cur is None or df_cur.empty:
             st.warning("Sin datos. Ejecuta nuevamente la extracción.")
             st.stop()
@@ -1445,7 +1483,12 @@ with col_R:
                 "Rubro":    st.column_config.TextColumn("Rubro", width="large"),
                 "QT":       st.column_config.SelectboxColumn("QT", options=["Sí", "No"], width="small"),
                 "T. Cambio": st.column_config.TextColumn("Moneda/TC", width="small"),
-                "(+ IVA)":  st.column_config.SelectboxColumn("IVA", options=["Sí", "Incluido", "Exento", "No", "N/M"], width="small"),
+                "(+ IVA)":  st.column_config.SelectboxColumn(
+                    "IVA",
+                    options=["Sí", "Incluido", "Exento", "N/M"],
+                    width="small",
+                    help="Sí=16% separado | Incluido=ya en tarifa | Exento=0% | N/M=no mencionado",
+                ),
                 "Cantidad": st.column_config.NumberColumn("Cant.", format="%d", width="small"),
                 "Precio Unitario":    st.column_config.NumberColumn("P. Unit.",  format="$%.2f", width="medium"),
                 "Subtotal (Sin IVA)": st.column_config.NumberColumn("Subtotal",  format="$%.2f", width="medium"),
@@ -1461,11 +1504,18 @@ with col_R:
         updated_df = recalc_derived(edited_df)
         new_hash = _df_hash(updated_df)
         if new_hash != st.session_state.df_hash:
-            st.session_state.editor_df = updated_df
             st.session_state.df = updated_df
             st.session_state.df_hash = new_hash
+            # Solo hacer rerun una vez para reflejar los campos calculados
+            if not st.session_state.get("_rerun_guard"):
+                st.session_state._rerun_guard = True
+                st.rerun()
+            else:
+                st.session_state._rerun_guard = False
+        else:
+            st.session_state._rerun_guard = False
 
-        df_cur = st.session_state.editor_df if st.session_state.editor_df is not None else st.session_state.df
+        df_cur = st.session_state.df
 
         # ── KPIs dinámicos (N3: Presupuesto Global) ──────────
         df_prov   = df_cur[df_cur["Tipo"] == "Cotización Proveedor"]
