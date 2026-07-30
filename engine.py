@@ -1,5 +1,5 @@
 # ============================================================
-# CONCILIADOR DE COTIZACIONES  |  engine.py  v6.5
+# CONCILIADOR DE COTIZACIONES  |  engine.py  v6.6
 # Motor de extracción puro – sin dependencias de GUI.
 # Compatible con PyQt6 y cualquier otro frontend.
 # ============================================================
@@ -9,9 +9,28 @@ import datetime
 import hashlib
 import io
 import math
+import os
 import re
 import sys
 from typing import Optional
+
+# ── Tesseract path for Windows & PyInstaller ─────────────────
+if hasattr(sys, '_MEIPASS'):
+    _base_dir = sys._MEIPASS
+else:
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+
+TESSERACT_PATH = os.path.join(_base_dir, 'bin', 'tesseract', 'tesseract.exe')
+if not os.path.exists(TESSERACT_PATH):
+    TESSERACT_PATH = os.getenv('TESSERACT_PATH', r'C:\Program Files\Tesseract-OCR\tesseract.exe')
+
+if os.path.exists(TESSERACT_PATH):
+    _tess_dir = os.path.dirname(TESSERACT_PATH)
+    if _tess_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = os.environ.get('PATH', '') + os.pathsep + _tess_dir
+    _tessdata = os.path.join(_tess_dir, 'tessdata')
+    if os.path.isdir(_tessdata):
+        os.environ['TESSDATA_PREFIX'] = _tessdata
 
 import fitz          # PyMuPDF
 import numpy as np
@@ -273,10 +292,42 @@ def render_page(pdf_bytes: bytes, idx: int, scale: float = 1.5) -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────
-# OCR
+# OCR — Motor mejorado con 3 niveles de fallback
+# 1. PyTesseract + Max RGB (elimina marcatextos de colores)
+# 2. RapidOCR (ONNX) como respaldo
+# 3. PyMuPDF OCR integrado como último recurso
 # ─────────────────────────────────────────────────────────────
+
+def _try_pytesseract_page(pdf_bytes: bytes, idx: int, lang: str = "spa") -> str:
+    """OCR con pytesseract + filtro Max RGB que elimina resaltadores de color."""
+    try:
+        import pytesseract
+        from PIL import Image
+
+        if os.path.exists(TESSERACT_PATH):
+            pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
+
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            pix = doc[idx].get_pixmap(
+                matrix=fitz.Matrix(2.0, 2.0), colorspace=fitz.csRGB, alpha=False
+            )
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+        # Max RGB filter: convierte a escala de grises tomando el canal
+        # más brillante de cada pixel. Esto elimina marcatextos (naranja,
+        # amarillo, verde) que son brillantes, dejando el texto negro intacto.
+        arr = np.array(img)
+        max_arr = np.max(arr, axis=2)
+        img_max = Image.fromarray(max_arr)
+
+        text = pytesseract.image_to_string(img_max, lang=lang)
+        return text.strip()
+    except Exception:
+        return ""
+
+
 def _get_ocr():
-    """Devuelve el motor OCR (singleton). None si no está disponible.
+    """Devuelve el motor RapidOCR (singleton). None si no está disponible.
 
     Soporta dos generaciones de rapidocr-onnxruntime:
     - v1.3.x+ (API nueva): RapidOCR(det_model_dir=..., rec_model_dir=..., cls_model_dir=...)
@@ -290,10 +341,8 @@ def _get_ocr():
     try:
         from rapidocr_onnxruntime import RapidOCR
         try:
-            # API 1.2.x o la más nueva por defecto (sin parámetros)
             _ocr_engine = RapidOCR()
         except Exception:
-            # Fallback para algunas versiones intermedias (1.3.x) que exigían los argumentos
             _ocr_engine = RapidOCR(
                 det_model_dir=None, rec_model_dir=None, cls_model_dir=None
             )
@@ -305,16 +354,8 @@ def _get_ocr():
         return None
 
 
-def ocr_page(
-    pdf_bytes: bytes,
-    idx: int,
-    on_warning: Optional[callable] = None,
-) -> str:
-    """OCR de una página. on_warning(msg) se llama ante errores no fatales.
-
-    Renderiza a 2.5x para mejorar la lectura de documentos escaneados
-    con baja resolución (ej. fotos de celular o escaneos oscuros).
-    """
+def _try_rapidocr_page(pdf_bytes: bytes, idx: int) -> str:
+    """OCR con RapidOCR (ONNX). Funciona sin Tesseract instalado."""
     ocr = _get_ocr()
     if ocr is None:
         return ""
@@ -330,13 +371,53 @@ def ocr_page(
             if result:
                 return "\n".join(r[1] for r in result if r and len(r) > 1)
             return ""
-    except Exception as exc:
-        msg = f"Error OCR pág. {idx + 1}: {exc}"
-        if on_warning:
-            on_warning(msg)
-        else:
-            print(f"[engine] {msg}", file=sys.stderr)
+    except Exception:
         return ""
+
+
+def _try_pymupdf_ocr(pdf_bytes: bytes, idx: int, lang: str = "spa") -> str:
+    """Último recurso: OCR integrado de PyMuPDF."""
+    try:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            page = doc[idx]
+            tp = page.get_textpage_ocr(language=lang, dpi=300, full=True)
+            return page.get_text(textpage=tp).strip()
+    except Exception:
+        return ""
+
+
+def ocr_page(
+    pdf_bytes: bytes,
+    idx: int,
+    on_warning: Optional[callable] = None,
+) -> str:
+    """OCR de una página con 3 niveles de fallback.
+
+    1. PyTesseract + Max RGB (mejor contra marcatextos)
+    2. RapidOCR (ONNX, no necesita Tesseract)
+    3. PyMuPDF OCR integrado (último recurso)
+
+    on_warning(msg) se llama ante errores no fatales.
+    """
+    # Nivel 1: PyTesseract con filtro Max RGB
+    text = _try_pytesseract_page(pdf_bytes, idx)
+    if text and len(text) > 20:
+        return text
+
+    # Nivel 2: RapidOCR
+    text = _try_rapidocr_page(pdf_bytes, idx)
+    if text and len(text) > 20:
+        return text
+
+    # Nivel 3: PyMuPDF OCR
+    text = _try_pymupdf_ocr(pdf_bytes, idx)
+    if text and len(text) > 20:
+        return text
+
+    # Si ninguno funcionó, avisar
+    if on_warning:
+        on_warning(f"OCR pág. {idx + 1}: No se pudo extraer texto con ningún motor.")
+    return text or ""
 
 
 # ─────────────────────────────────────────────────────────────
