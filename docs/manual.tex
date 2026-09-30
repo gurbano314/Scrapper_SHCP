@@ -1,27 +1,27 @@
-﻿% ============================================================
-%  MANUAL DE USUARIO â€” Conciliador de Cotizaciones v6.6
+% ============================================================
+%  MANUAL DE USUARIO — Conciliador de Cotizaciones v6.6
 %  Compilar con: pdflatex -shell-escape manual.tex
 %  Requiere: texlive-full (o MiKTeX completo)
 % ============================================================
 \documentclass[12pt, a4paper, oneside]{report}
 
-% â”€â”€ Idioma y codificaciÃ³n â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Idioma y codificación ─────────────────────────────────
 \usepackage[spanish, es-noshorthands]{babel}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 
-% â”€â”€ GeometrÃ­a de pÃ¡gina â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Geometría de página ───────────────────────────────────
 \usepackage[
   top=2.5cm, bottom=2.5cm,
   left=3cm,  right=2.5cm,
   headheight=15pt
 ]{geometry}
 
-% â”€â”€ Fuentes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Fuentes ───────────────────────────────────────────────
 \usepackage{lmodern}
 \usepackage{microtype}
 
-% â”€â”€ Colores corporativos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Colores corporativos ──────────────────────────────────
 \usepackage[dvipsnames, svgnames, x11names]{xcolor}
 \definecolor{vino}{HTML}{6E152E}
 \definecolor{vinoLite}{HTML}{b84a6b}
@@ -36,13 +36,13 @@
 \definecolor{grisClaro}{HTML}{f5f5f5}
 \definecolor{grisMedio}{HTML}{dddddd}
 
-% â”€â”€ GrÃ¡ficos e imÃ¡genes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Gráficos e imágenes ───────────────────────────────────
 \usepackage{graphicx}
 \usepackage{float}
 \usepackage{caption}
 \usepackage{subcaption}
 
-% â”€â”€ Tablas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Tablas ────────────────────────────────────────────────
 \usepackage{booktabs}
 \usepackage{tabularx}
 \usepackage{longtable}
@@ -50,7 +50,7 @@
 \usepackage{multirow}
 \usepackage{colortbl}
 
-% â”€â”€ Cajas de aviso (tcolorbox) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Cajas de aviso (tcolorbox) ────────────────────────────
 \usepackage[most]{tcolorbox}
 \tcbuselibrary{breakable, skins}
 
@@ -89,7 +89,7 @@
   left=6pt, right=6pt, top=10pt, bottom=4pt,
   boxrule=0.8pt, arc=4pt, #1
 }
-% Bloque de cÃ³digo / ruta
+% Bloque de código / ruta
 \newtcolorbox{rutabox}[1][]{
   enhanced,
   colback=darkbg, colframe=borderCol,
@@ -99,7 +99,7 @@
   boxrule=0.6pt, arc=3pt, #1
 }
 
-% â”€â”€ Encabezados y pies de pÃ¡gina â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Encabezados y pies de página ──────────────────────────
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
@@ -109,26 +109,26 @@
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\headrule}{\hbox to\headwidth{\color{vino}\leaders\hrule height\headrulewidth\hfill}}
 
-% â”€â”€ Hiperenlaces â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Hiperenlaces ──────────────────────────────────────────
 \usepackage[
   colorlinks=true,
   linkcolor=vino,
   urlcolor=SteelBlue,
   citecolor=vino,
-  pdftitle={Manual de Usuario â€“ Conciliador de Cotizaciones v6.6},
+  pdftitle={Manual de Usuario – Conciliador de Cotizaciones v6.6},
   pdfauthor={SHCP - UPIT},
-  pdfsubject={ExtracciÃ³n automÃ¡tica de montos en cotizaciones PDF},
-  pdfkeywords={cotizaciones, PDF, extracciÃ³n, IVA, Banxico},
+  pdfsubject={Extracción automática de montos en cotizaciones PDF},
+  pdfkeywords={cotizaciones, PDF, extracción, IVA, Banxico},
   pdfpagemode=UseOutlines,
   pdfstartview=FitH
 ]{hyperref}
 
-% â”€â”€ Listas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Listas ────────────────────────────────────────────────
 \usepackage{enumitem}
 \setlist[itemize]{leftmargin=1.2em, itemsep=2pt}
 \setlist[enumerate]{leftmargin=1.4em, itemsep=2pt}
 
-% â”€â”€ Secciones personalizadas â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Secciones personalizadas ──────────────────────────────
 \usepackage{titlesec}
 \titleformat{\chapter}[display]
   {\normalfont\huge\bfseries\color{vino}}
@@ -140,27 +140,27 @@
   {\normalfont\large\bfseries\color{vino!70!black}}
   {\thesubsection}{1em}{}
 
-% â”€â”€ Comandos de utilidad â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Comandos de utilidad ──────────────────────────────────
 \newcommand{\btn}[1]{\texttt{\colorbox{vino!15}{\strut#1}}}
 \newcommand{\campo}[1]{\textit{#1}}
 \newcommand{\ruta}[1]{\texttt{\small#1}}
 \newcommand{\tecla}[1]{\textsf{\small\fbox{#1}}}
 
-% â”€â”€ Metadata del documento â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Metadata del documento ────────────────────────────────
 \title{%
   {\Huge\color{vino}\textbf{Conciliador de Cotizaciones}}\\[6pt]
-  {\Large\color{vino!70!black}Manual de Usuario â€” v6.6}\\[10pt]
-  {\normalsize Motor de extracciÃ³n PDF nativo con PyQt6}
+  {\Large\color{vino!70!black}Manual de Usuario — v6.6}\\[10pt]
+  {\normalsize Motor de extracción PDF nativo con PyQt6}
 }
 \author{SHCP - UPIT}
 \date{\today}
 
-% â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ─────────────────────────────────────────────────────────────
 %  INICIO DEL DOCUMENTO
-% â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ─────────────────────────────────────────────────────────────
 \begin{document}
 
-% â”€â”€ Portada â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Portada ───────────────────────────────────────────────
 \begin{titlepage}
   \centering
   \vspace*{3cm}
@@ -169,73 +169,73 @@
   {\color{vino!70!black}\fontsize{18}{24}\selectfont de Cotizaciones}\\[8pt]
   {\color{vinoLite}\rule{\linewidth}{2pt}}\\[20pt]
   {\color{vino!70!black}\Large Manual de Usuario}\\[6pt]
-  {\color{vinoLite}\large VersiÃ³n 6.5}\\[40pt]
+  {\color{vinoLite}\large Versión 6.5}\\[40pt]
   {\color{vino!70!black}\normalsize
-    Motor de extracciÃ³n PDF nativo\\
-    5 estrategias de anÃ¡lisis Â· OCR Â· API Banxico\\[20pt]
-    Guardado de proyectos Â· Interfaz nativa Windows (PyQt6)
+    Motor de extracción PDF nativo\\
+    5 estrategias de análisis · OCR · API Banxico\\[20pt]
+    Guardado de proyectos · Interfaz nativa Windows (PyQt6)
   }\\[50pt]
-  {\color{borderCol}\small SHCP - UPIT Â· \today}
+  {\color{borderCol}\small SHCP - UPIT · \today}
 \end{titlepage}
 
 
 \cleardoublepage
 
-% â”€â”€ Tabla de contenidos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Tabla de contenidos ───────────────────────────────────
 \tableofcontents
 \cleardoublepage
 
 % =============================================================
-\chapter{IntroducciÃ³n}
+\chapter{Introducción}
 % =============================================================
 
-\section{Â¿QuÃ© es el Conciliador?}
+\section{¿Qué es el Conciliador?}
 
-El \textbf{Conciliador de Cotizaciones v6.6} es una aplicaciÃ³n de escritorio para
-Windows que automatiza la extracciÃ³n y conciliaciÃ³n de montos econÃ³micos contenidos
+El \textbf{Conciliador de Cotizaciones v6.6} es una aplicación de escritorio para
+Windows que automatiza la extracción y conciliación de montos económicos contenidos
 en archivos PDF de cotizaciones de proveedores y presupuestos de proyectos.
 
-Su objetivo es eliminar la transcripciÃ³n manual de cifras econÃ³micas al comparar
+Su objetivo es eliminar la transcripción manual de cifras económicas al comparar
 documentos PDF con los montos registrados en el Anexo Escrito del proyecto.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/01_estado_inicial.png}
-  \caption{Ventana principal del Conciliador â€” estado inicial al abrir la aplicaciÃ³n.}
+  \caption{Ventana principal del Conciliador — estado inicial al abrir la aplicación.}
   \label{fig:ventana_inicial}
 \end{figure}
 
-\section{CaracterÃ­sticas principales}
+\section{Características principales}
 
 \begin{itemize}
-  \item \textbf{ExtracciÃ³n multinivel:} 5 estrategias independientes de anÃ¡lisis
-        (tablas nativas, triangulaciÃ³n, OCR, bÃºsqueda textual y pares adyacentes).
-  \item \textbf{Manejo de IVA:} Detecta automÃ¡ticamente si el IVA estÃ¡ incluido,
+  \item \textbf{Extracción multinivel:} 5 estrategias independientes de análisis
+        (tablas nativas, triangulación, OCR, búsqueda textual y pares adyacentes).
+  \item \textbf{Manejo de IVA:} Detecta automáticamente si el IVA está incluido,
         desglosado o exento; descompone el impuesto al 16\%.
-  \item \textbf{ConversiÃ³n de divisas:} Consulta la API del Banco de MÃ©xico (Banxico)
+  \item \textbf{Conversión de divisas:} Consulta la API del Banco de México (Banxico)
         para obtener el tipo de cambio vigente de USD, EUR y CAD.
-  \item \textbf{Multidocumento:} Procesa mÃºltiples PDFs en paralelo, asignando cada
-        secciÃ³n a un archivo y rango de pÃ¡ginas diferente.
-  \item \textbf{ExportaciÃ³n a Excel:} Genera un reporte \texttt{.xlsx} con formato
-        profesional, fÃ³rmulas de validaciÃ³n y estilo corporativo.
+  \item \textbf{Multidocumento:} Procesa múltiples PDFs en paralelo, asignando cada
+        sección a un archivo y rango de páginas diferente.
+  \item \textbf{Exportación a Excel:} Genera un reporte \texttt{.xlsx} con formato
+        profesional, fórmulas de validación y estilo corporativo.
   \item \textbf{Guardado y carga de proyectos:} Guarda el estado completo del
         proyecto (PDFs, secciones, tabla y token) en un archivo \texttt{.cshcp}
         portable entre equipos.
-  \item \textbf{BotÃ³n de guardado rÃ¡pido:} Acceso directo en la barra superior
-        para guardar sin navegar menÃºs.
-  \item \textbf{ActualizaciÃ³n de token en caliente:} Cambia el token de Banxico
+  \item \textbf{Botón de guardado rápido:} Acceso directo en la barra superior
+        para guardar sin navegar menús.
+  \item \textbf{Actualización de token en caliente:} Cambia el token de Banxico
         sin perder las ediciones manuales ya realizadas en la tabla.
-  \item \textbf{Interfaz nativa:} AplicaciÃ³n \texttt{.exe} autÃ³noma para Windows.
+  \item \textbf{Interfaz nativa:} Aplicación \texttt{.exe} autónoma para Windows.
 \end{itemize}
 
-\section{PÃºblico objetivo}
+\section{Público objetivo}
 
-Esta herramienta estÃ¡ diseÃ±ada para personal administrativo de EFIDEPORTE
-responsable de la conciliaciÃ³n de cotizaciones de proveedores con los montos
+Esta herramienta está diseñada para personal administrativo de EFIDEPORTE
+responsable de la conciliación de cotizaciones de proveedores con los montos
 contenidos en los anexos escritos de los proyectos deportivos.
 
 % =============================================================
-\chapter{Requisitos e InstalaciÃ³n}
+\chapter{Requisitos e Instalación}
 % =============================================================
 
 \section{Requisitos del sistema}
@@ -244,22 +244,22 @@ contenidos en los anexos escritos de los proyectos deportivos.
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{Componente} & \textbf{Requisito mÃ­nimo} \\
+    \textbf{Componente} & \textbf{Requisito mínimo} \\
     \midrule
     Sistema operativo & Windows 10 (64-bit) o superior \\
-    Memoria RAM       & 4 GB (recomendado: 8 GB o mÃ¡s) \\
+    Memoria RAM       & 4 GB (recomendado: 8 GB o más) \\
     Espacio en disco  & 500 MB libres (incluye dependencias) \\
-    ResoluciÃ³n        & 1280 Ã— 720 px mÃ­nimo; 1920 Ã— 1080 recomendado \\
-    ConexiÃ³n a internet & Opcional (solo para tipo de cambio Banxico) \\
+    Resolución        & 1280 × 720 px mínimo; 1920 × 1080 recomendado \\
+    Conexión a internet & Opcional (solo para tipo de cambio Banxico) \\
     \bottomrule
   \end{tabularx}
-  \caption{Requisitos mÃ­nimos del sistema.}
+  \caption{Requisitos mínimos del sistema.}
 \end{table}
 
-\section{InstalaciÃ³n}
+\section{Instalación}
 
-La aplicaciÃ³n se distribuye como una carpeta autocontenida generada con
-PyInstaller. \textbf{No requiere instalaciÃ³n} â€” basta con copiar la carpeta y
+La aplicación se distribuye como una carpeta autocontenida generada con
+PyInstaller. \textbf{No requiere instalación} — basta con copiar la carpeta y
 ejecutar el archivo:
 
 \begin{rutabox}
@@ -268,7 +268,7 @@ dist\textbackslash{}Conciliador\textbackslash{}Conciliador.exe
 
 \begin{notabox}
 En el primer arranque, Windows Defender SmartScreen puede mostrar el mensaje
-``Windows protegiÃ³ tu equipo''. Haz clic en \textbf{MÃ¡s informaciÃ³n} y luego en
+``Windows protegió tu equipo''. Haz clic en \textbf{Más información} y luego en
 \textbf{Ejecutar de todas formas}. Esto solo ocurre la primera vez.
 \end{notabox}
 
@@ -291,39 +291,39 @@ completa, nunca solo el \texttt{.exe}.
 \end{warningbox}
 
 % =============================================================
-\chapter{DescripciÃ³n de la Interfaz}
+\chapter{Descripción de la Interfaz}
 % =============================================================
 
-La ventana principal estÃ¡ dividida en tres zonas:
+La ventana principal está dividida en tres zonas:
 
 \begin{enumerate}
-  \item \textbf{Panel lateral} (izquierda): configuraciÃ³n de PDFs y secciones.
+  \item \textbf{Panel lateral} (izquierda): configuración de PDFs y secciones.
   \item \textbf{Visor de PDF} (centro): muestra el documento cargado.
   \item \textbf{Editor de datos} (derecha): tabla de resultados y KPIs.
 \end{enumerate}
 
 \subsection{Barra superior (Banner)}
 
-La barra superior contiene dos botones de acceso rÃ¡pido siempre visibles:
+La barra superior contiene dos botones de acceso rápido siempre visibles:
 
 \begin{table}[H]
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{BotÃ³n} & \textbf{FunciÃ³n} \\
+    \textbf{Botón} & \textbf{Función} \\
     \midrule
-    \btn{\texttt{={}={}=}} (Hamburguesa) & Muestra u oculta el panel lateral de configuraciÃ³n.
-                             Ãštil para ganar espacio en pantallas pequeÃ±as. \\
+    \btn{\texttt{={}={}=}} (Hamburguesa) & Muestra u oculta el panel lateral de configuración.
+                             Útil para ganar espacio en pantallas pequeñas. \\
     \btn{\textbf{[Guardar]}}      & Guarda el proyecto actual en el archivo \texttt{.cshcp}
-                             asociado. Si es la primera vez, abre el diÃ¡logo de
+                             asociado. Si es la primera vez, abre el diálogo de
                              guardado. Las guardadas posteriores son silenciosas
-                             (sin diÃ¡logo) y se confirman en la barra de estado. \\
+                             (sin diálogo) y se confirman en la barra de estado. \\
     \bottomrule
   \end{tabularx}
   \caption{Botones de la barra superior.}
 \end{table}
 
-\section{Panel lateral â€” ConfiguraciÃ³n}
+\section{Panel lateral — Configuración}
 
 \begin{figure}[H]
   \centering
@@ -338,9 +338,9 @@ El panel lateral contiene cuatro grupos colapsables:
 
 \begin{itemize}
   \item \btn{Agregar PDF(s)}: abre el selector de archivos para cargar uno o
-        varios PDFs simultÃ¡neamente.
+        varios PDFs simultáneamente.
   \item \textbf{Lista de archivos}: muestra los archivos cargados con su nombre.
-        Si hay mÃ¡s de 3, se puede desplazar con la barra de scroll.
+        Si hay más de 3, se puede desplazar con la barra de scroll.
   \item \btn{Limpiar PDFs}: descarga todos los archivos cargados.
 \end{itemize}
 
@@ -349,32 +349,32 @@ El panel lateral contiene cuatro grupos colapsables:
 Escribe el nombre del proyecto (p. ej. ``EFIDEPORTE 2026''). Este nombre aparece
 en los encabezados del reporte Excel exportado.
 
-\subsection{Banxico â€” Tipo de Cambio}
+\subsection{Banxico — Tipo de Cambio}
 
-Introduce el token de la API del Banco de MÃ©xico para habilitar la conversiÃ³n
-automÃ¡tica de divisas. El token se muestra enmascarado por seguridad.
-Ver \hyperref[sec:banxico]{SecciÃ³n~\ref{sec:banxico}} para obtener el token.
+Introduce el token de la API del Banco de México para habilitar la conversión
+automática de divisas. El token se muestra enmascarado por seguridad.
+Ver \hyperref[sec:banxico]{Sección~\ref{sec:banxico}} para obtener el token.
 
-Junto al campo de token se encuentra el botÃ³n \btn{Aplicar}. Ãšsalo cuando
-haya cambiado el token despuÃ©s de una extracciÃ³n: aplica el nuevo tipo de
-cambio a las filas que aÃºn estÃ¡n en divisa extranjera \textbf{sin borrar las
+Junto al campo de token se encuentra el botón \btn{Aplicar}. Úsalo cuando
+haya cambiado el token después de una extracción: aplica el nuevo tipo de
+cambio a las filas que aún están en divisa extranjera \textbf{sin borrar las
 ediciones manuales} que hayas realizado en la tabla.
 
 \begin{consejobox}
 Si ya extrajiste datos, corregiste algunas celdas manualmente y luego
-necesitas actualizar el token, usa el botÃ³n \btn{Aplicar} en lugar de
-volver a presionar \btn{Extraer Montos}. AsÃ­ conservas tus correcciones.
+necesitas actualizar el token, usa el botón \btn{Aplicar} en lugar de
+volver a presionar \btn{Extraer Montos}. Así conservas tus correcciones.
 \end{consejobox}
 
 \subsection{Secciones (Cotizaciones)}
 
-Cada \textbf{secciÃ³n} corresponde a una cotizaciÃ³n o presupuesto que se va a
-analizar. Puedes agregar hasta 50 secciones. Para eliminar una secciÃ³n, haz clic en el botÃ³n con Ã­cono de basurero situado junto a su nombre; esto la borrarÃ¡ tanto del panel como de la tabla de resultados automÃ¡ticamente.
+Cada \textbf{sección} corresponde a una cotización o presupuesto que se va a
+analizar. Puedes agregar hasta 50 secciones. Para eliminar una sección, haz clic en el botón con ícono de basurero situado junto a su nombre; esto la borrará tanto del panel como de la tabla de resultados automáticamente.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=0.45\linewidth]{images/05_seccion_widget.png}
-  \caption{Widget de una secciÃ³n con todos sus campos.}
+  \caption{Widget de una sección con todos sus campos.}
   \label{fig:seccion_widget}
 \end{figure}
 
@@ -382,37 +382,37 @@ analizar. Puedes agregar hasta 50 secciones. Para eliminar una secciÃ³n, haz c
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{Campo} & \textbf{DescripciÃ³n} \\
+    \textbf{Campo} & \textbf{Descripción} \\
     \midrule
-    Rubro & Nombre descriptivo de la cotizaciÃ³n (aparece en el reporte). \\
-    Tipo  & \textit{CotizaciÃ³n Proveedor} o \textit{Presupuesto Global}.\\
-    PDF   & Archivo PDF que contiene esta cotizaciÃ³n (visible si hay $>$1 PDF). \\
-    PÃ¡gs. & Rango de pÃ¡ginas a analizar (``De'' y ``A''). \\
+    Rubro & Nombre descriptivo de la cotización (aparece en el reporte). \\
+    Tipo  & \textit{Cotización Proveedor} o \textit{Presupuesto Global}.\\
+    PDF   & Archivo PDF que contiene esta cotización (visible si hay $>$1 PDF). \\
+    Págs. & Rango de páginas a analizar (``De'' y ``A''). \\
     Moneda & MXN, USD, EUR o CAD. Si es diferente a MXN, se convierte. \\
-    Detectar IVA & Si estÃ¡ marcado, el motor intenta separar el IVA del total. \\
-    Calcular subtotal & Si estÃ¡ marcado, calcula el subtotal sin IVA automÃ¡ticamente. \\
+    Detectar IVA & Si está marcado, el motor intenta separar el IVA del total. \\
+    Calcular subtotal & Si está marcado, calcula el subtotal sin IVA automáticamente. \\
     \bottomrule
   \end{tabularx}
-  \caption{Campos de configuraciÃ³n de una secciÃ³n.}
+  \caption{Campos de configuración de una sección.}
 \end{table}
 
 \section{Visor de PDF}
 
-El panel central muestra el PDF activo pÃ¡gina por pÃ¡gina.
+El panel central muestra el PDF activo página por página.
 
 \begin{itemize}
-  \item \textbf{Paneo y Zoom}: Puedes acercar o alejar el documento. Si el documento tiene zoom, haz clic sostenido y arrastra con el ratÃ³n para desplazar la hoja libremente.
-  \item \textbf{< / >}: pÃ¡gina anterior / siguiente.
-  \item \textbf{Spinner de pÃ¡gina}: escribe directamente el nÃºmero de pÃ¡gina y
+  \item \textbf{Paneo y Zoom}: Puedes acercar o alejar el documento. Si el documento tiene zoom, haz clic sostenido y arrastra con el ratón para desplazar la hoja libremente.
+  \item \textbf{< / >}: página anterior / siguiente.
+  \item \textbf{Spinner de página}: escribe directamente el número de página y
         presiona \tecla{Enter} para saltar.
-  \item \textbf{Indicador de secciÃ³n}: cuando la pÃ¡gina cae dentro del rango
-        configurado para alguna secciÃ³n, aparece una etiqueta de color vino
-        indicando a quÃ© secciÃ³n corresponde.
+  \item \textbf{Indicador de sección}: cuando la página cae dentro del rango
+        configurado para alguna sección, aparece una etiqueta de color vino
+        indicando a qué sección corresponde.
 \end{itemize}
 
 \begin{notabox}
-El visor solo muestra el PDF; la extracciÃ³n se realiza en segundo plano por el
-motor de anÃ¡lisis, no por lo que se ve en pantalla.
+El visor solo muestra el PDF; la extracción se realiza en segundo plano por el
+motor de análisis, no por lo que se ve en pantalla.
 \end{notabox}
 
 \section{Editor de datos}
@@ -420,7 +420,7 @@ motor de anÃ¡lisis, no por lo que se ve en pantalla.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/03b_datos_zoom.png}
-  \caption{Panel de datos con KPIs y tabla de resultados despuÃ©s de la extracciÃ³n.}
+  \caption{Panel de datos con KPIs y tabla de resultados después de la extracción.}
   \label{fig:datos}
 \end{figure}
 
@@ -430,10 +430,10 @@ motor de anÃ¡lisis, no por lo que se ve en pantalla.
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{KPI} & \textbf{DescripciÃ³n} \\
+    \textbf{KPI} & \textbf{Descripción} \\
     \midrule
     Total Proveedores   & Suma de todos los \campo{Total con IVA} de secciones tipo
-                          \textit{CotizaciÃ³n Proveedor}. \\
+                          \textit{Cotización Proveedor}. \\
     Monto Anexo Manual  & Suma de los campos \campo{Monto en Anexo Escrito} capturados
                           manualmente; o total del \textit{Presupuesto Global} si existe. \\
     Diferencia          & Total Proveedores $-$ Monto Anexo. \textcolor{greenOk}{Verde}
@@ -445,30 +445,30 @@ motor de anÃ¡lisis, no por lo que se ve en pantalla.
 
 \subsection{Tabla de resultados}
 
-Cada fila corresponde a una secciÃ³n procesada. Las columnas son editables
-directamente â€” haz doble clic en cualquier celda para modificarla.
+Cada fila corresponde a una sección procesada. Las columnas son editables
+directamente — haz doble clic en cualquier celda para modificarla.
 
 \begin{longtable}{lp{0.62\linewidth}}
   \toprule
   \textbf{Columna} & \textbf{Contenido} \\
   \midrule
   \endhead
-  NÂº Sec             & NÃºmero correlativo de la secciÃ³n para rÃ¡pida identificaciÃ³n. \\
-  SecciÃ³n            & Nombre de la secciÃ³n de donde provienen los datos. \\
-  Tipo               & Tipo de secciÃ³n: CotizaciÃ³n o Presupuesto Global. \\
+  Nº Sec             & Número correlativo de la sección para rápida identificación. \\
+  Sección            & Nombre de la sección de donde provienen los datos. \\
+  Tipo               & Tipo de sección: Cotización o Presupuesto Global. \\
   Fecha              & Fecha detectada en el documento. \\
-  Rubro              & Nombre de la secciÃ³n (configurable). \\
-  QT                 & Â¿Fue presentada al ComitÃ© de Adquisiciones? (SÃ­/No). \\
+  Rubro              & Nombre de la sección (configurable). \\
+  QT                 & ¿Fue presentada al Comité de Adquisiciones? (Sí/No). \\
   T. Cambio          & Moneda y tipo de cambio aplicado (MXN, USD, EUR, CAD). \\
-  (+ IVA)            & CondiciÃ³n del IVA: \textit{SÃ­}, \textit{Incluido}, \textit{Exento} o \textit{N/M}. \\
-  Cantidad           & NÃºmero de unidades detectado. \\
+  (+ IVA)            & Condición del IVA: \textit{Sí}, \textit{Incluido}, \textit{Exento} o \textit{N/M}. \\
+  Cantidad           & Número de unidades detectado. \\
   Precio Unitario    & Precio por unidad (sin IVA). \\
-  Subtotal (Sin IVA) & Cantidad Ã— Precio Unitario. \\
+  Subtotal (Sin IVA) & Cantidad × Precio Unitario. \\
   IVA 16\%           & Importe del IVA calculado. \\
   Total con IVA      & Total final incluyendo IVA. \\
-  Diferencia final   & Total con IVA $-$ Monto en Anexo. \textbf{Calculado automÃ¡ticamente.} \\
+  Diferencia final   & Total con IVA $-$ Monto en Anexo. \textbf{Calculado automáticamente.} \\
   Monto en Anexo Escrito & Monto registrado en el Anexo del proyecto. \\
-  Observaciones      & Notas del motor de extracciÃ³n y alertas. \\
+  Observaciones      & Notas del motor de extracción y alertas. \\
   \bottomrule
   \caption{Columnas de la tabla de resultados.}
 \end{longtable}
@@ -480,174 +480,174 @@ directamente â€” haz doble clic en cualquier celda para modificarla.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/02_sidebar_configurado.png}
-  \caption{AplicaciÃ³n con PDFs cargados y secciones configuradas, lista para extraer.}
+  \caption{Aplicación con PDFs cargados y secciones configuradas, lista para extraer.}
   \label{fig:configurado}
 \end{figure}
 
-\section{Paso 1 â€” Cargar los PDFs}
+\section{Paso 1 — Cargar los PDFs}
 
 \begin{pasobox}{1}
-Haz clic en \btn{Agregar PDF(s)} en la secciÃ³n \textit{Documentos PDF} del
+Haz clic en \btn{Agregar PDF(s)} en la sección \textit{Documentos PDF} del
 panel lateral.
 
 \begin{itemize}
   \item Selecciona uno o varios archivos PDF en el explorador.
-  \item Para seleccionar varios: mantÃ©n presionada \tecla{Ctrl} y haz clic en
+  \item Para seleccionar varios: mantén presionada \tecla{Ctrl} y haz clic en
         cada archivo, o usa \tecla{Shift} para rangos.
   \item Haz clic en \textbf{Abrir}.
 \end{itemize}
 
-La lista de archivos aparece en el panel lateral con el total de pÃ¡ginas.
-El PDF se carga automÃ¡ticamente en el visor central.
+La lista de archivos aparece en el panel lateral con el total de páginas.
+El PDF se carga automáticamente en el visor central.
 \end{pasobox}
 
 \begin{consejobox}
-Si las cotizaciones estÃ¡n en documentos separados (un PDF por proveedor),
-cÃ¡rgalos todos a la vez. El sistema los consolida internamente y permite
-asignar cada secciÃ³n a un PDF diferente.
+Si las cotizaciones están en documentos separados (un PDF por proveedor),
+cárgalos todos a la vez. El sistema los consolida internamente y permite
+asignar cada sección a un PDF diferente.
 \end{consejobox}
 
-\section{Paso 2 â€” Escribir el nombre del proyecto}
+\section{Paso 2 — Escribir el nombre del proyecto}
 
 \begin{pasobox}{2}
-En la secciÃ³n \textit{Proyecto} del panel lateral, escribe el nombre del
-proyecto en el campo \campo{Nombre}. Este texto aparecerÃ¡ en el encabezado
+En la sección \textit{Proyecto} del panel lateral, escribe el nombre del
+proyecto en el campo \campo{Nombre}. Este texto aparecerá en el encabezado
 del reporte Excel.
 
 \textbf{Ejemplo:} \texttt{EFIDEPORTE 2026}
 \end{pasobox}
 
-\section{Paso 3 â€” Configurar las secciones}
+\section{Paso 3 — Configurar las secciones}
 
 \begin{pasobox}{3}
 \begin{enumerate}
-  \item Ajusta el contador \campo{NÃºm. de secciones} al nÃºmero de cotizaciones
+  \item Ajusta el contador \campo{Núm. de secciones} al número de cotizaciones
         o presupuestos que deseas procesar.
-  \item Para cada secciÃ³n:
+  \item Para cada sección:
     \begin{itemize}
       \item Escribe un \campo{Rubro} descriptivo (ej. ``Caballerizas'').
       \item Selecciona el \campo{Tipo} adecuado.
       \item Si cargaste varios PDFs, elige el archivo correspondiente en el
             combo \campo{PDF}.
-      \item Establece el rango de pÃ¡ginas (\campo{De} / \campo{A}) donde
-            aparece el total de esa cotizaciÃ³n.
+      \item Establece el rango de páginas (\campo{De} / \campo{A}) donde
+            aparece el total de esa cotización.
       \item Selecciona la \campo{Moneda} si no es MXN.
       \item Deja marcado \campo{Detectar IVA} para que el motor determine
-            automÃ¡ticamente si el IVA estÃ¡ incluido o desglosado.
+            automáticamente si el IVA está incluido o desglosado.
     \end{itemize}
 \end{enumerate}
 \end{pasobox}
 
 \begin{notabox}
-\textbf{Â¿CÃ³mo sÃ© quÃ© pÃ¡ginas usar?} Navega por el visor PDF con los botones
-< / > y revisa dÃ³nde aparece el total o tabla de precios de cada cotizaciÃ³n.
-Anota el nÃºmero de pÃ¡gina (mostrado como ``PÃ¡gina X / Y'') y escrÃ­belo en el
+\textbf{¿Cómo sé qué páginas usar?} Navega por el visor PDF con los botones
+< / > y revisa dónde aparece el total o tabla de precios de cada cotización.
+Anota el número de página (mostrado como ``Página X / Y'') y escríbelo en el
 rango correspondiente.
 \end{notabox}
 
-\section{Paso 4 â€” Token Banxico (opcional)}
+\section{Paso 4 — Token Banxico (opcional)}
 \label{sec:banxico}
 
-Si alguna cotizaciÃ³n estÃ¡ en una moneda diferente a MXN (USD, EUR o CAD),
-necesitas un token de la API del Banco de MÃ©xico para obtener el tipo de cambio.
+Si alguna cotización está en una moneda diferente a MXN (USD, EUR o CAD),
+necesitas un token de la API del Banco de México para obtener el tipo de cambio.
 
 \begin{pasobox}{4}
 \begin{enumerate}
   \item Ve a \href{https://www.banxico.org.mx/SieAPIRest/service/v1/token}%
-        {www.banxico.org.mx ←’ SIE API ←’ Generar token}.
-  \item Resuelve el Captcha de seguridad que solicita la pÃ¡gina.
+        {www.banxico.org.mx → SIE API → Generar token}.
+  \item Resuelve el Captcha de seguridad que solicita la página.
   \item Copia el token generado.
-  \item PÃ©galo en el campo \campo{Token} del panel lateral.
+  \item Pégalo en el campo \campo{Token} del panel lateral.
 \end{enumerate}
-AparecerÃ¡ el mensaje \textit{Token activo} cuando el campo tenga contenido.
+Aparecerá el mensaje \textit{Token activo} cuando el campo tenga contenido.
 \end{pasobox}
 
 \begin{warningbox}
 Si no proporcionas un token y hay cotizaciones en divisas extranjeras, el
-sistema usarÃ¡ la cotizaciÃ³n del dÃ­a anterior almacenada en cachÃ© o reportarÃ¡
+sistema usará la cotización del día anterior almacenada en caché o reportará
 el monto en la divisa original sin convertir.
 \end{warningbox}
 
-\section{Paso 5 â€” Extraer los montos}
+\section{Paso 5 — Extraer los montos}
 
 \begin{pasobox}{5}
-Haz clic en el botÃ³n \btn{Extraer Montos} (en vino/rojo oscuro) al final
+Haz clic en el botón \btn{Extraer Montos} (en vino/rojo oscuro) al final
 del panel lateral.
 
 \begin{itemize}
   \item La barra de progreso en la parte inferior muestra el avance.
-  \item La barra de estado indica quÃ© secciÃ³n se estÃ¡ procesando.
-  \item Al terminar, la tabla de resultados se popula automÃ¡ticamente.
+  \item La barra de estado indica qué sección se está procesando.
+  \item Al terminar, la tabla de resultados se popula automáticamente.
 \end{itemize}
 \end{pasobox}
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/03_tabla_resultados.png}
-  \caption{Vista completa despuÃ©s de la extracciÃ³n: visor PDF + tabla con resultados.}
+  \caption{Vista completa después de la extracción: visor PDF + tabla con resultados.}
   \label{fig:resultados}
 \end{figure}
 
-\section{Paso 6 â€” Revisar y ajustar los resultados}
+\section{Paso 6 — Revisar y ajustar los resultados}
 
 \begin{pasobox}{6}
 \begin{enumerate}
-  \item Revisa los valores extraÃ­dos en la tabla.
-  \item Verifica la columna \campo{Observaciones} para entender cÃ³mo se obtuvo
+  \item Revisa los valores extraídos en la tabla.
+  \item Verifica la columna \campo{Observaciones} para entender cómo se obtuvo
         cada monto.
   \item Llena la columna \campo{Monto en Anexo Escrito} con el monto oficial
         registrado en el Anexo del proyecto.
-  \item Si algÃºn valor extraÃ­do es incorrecto, haz doble clic en la celda y
-        corrÃ­gelo manualmente.
+  \item Si algún valor extraído es incorrecto, haz doble clic en la celda y
+        corrígelo manualmente.
   \item Las columnas \campo{Diferencia final} y los KPIs se actualizan
-        automÃ¡ticamente al editar cualquier valor.
+        automáticamente al editar cualquier valor.
 \end{enumerate}
 \end{pasobox}
 
 \begin{notabox}
-La columna \campo{NÂº Sec}, \campo{SecciÃ³n} y \campo{Diferencia final} son de solo lectura. La Diferencia final se calcula como
+La columna \campo{Nº Sec}, \campo{Sección} y \campo{Diferencia final} son de solo lectura. La Diferencia final se calcula como
 \textit{Total con IVA} $-$ \textit{Monto en Anexo Escrito} y no se puede
 editar directamente.
 \end{notabox}
 
-\section{Paso 7 â€” Exportar el reporte}
+\section{Paso 7 — Exportar el reporte}
 
 \begin{pasobox}{7}
 \begin{enumerate}
   \item Haz clic en \btn{Descargar Excel} para generar el reporte completo.
-  \item Elige la ubicaciÃ³n y nombre del archivo en el diÃ¡logo de guardado.
+  \item Elige la ubicación y nombre del archivo en el diálogo de guardado.
   \item El archivo \texttt{.xlsx} se genera con formato profesional:
     \begin{itemize}
       \item Encabezados en color vino con texto blanco.
       \item Filas alternadas con tono gris claro.
       \item Columnas monetarias con formato \texttt{\$\#,\#\#0.00}.
-      \item FÃ³rmulas nativas integradas (Subtotal, IVA, Total, Diferencias) que se recalculan automÃ¡ticamente si editas los datos.
+      \item Fórmulas nativas integradas (Subtotal, IVA, Total, Diferencias) que se recalculan automáticamente si editas los datos.
       \item KPIs de suma al pie de la tabla.
     \end{itemize}
 \end{enumerate}
 
-Opcionalmente, \btn{Plantilla vacÃ­a} genera el mismo archivo pero sin los
-valores numÃ©ricos, Ãºtil para que un proveedor lo llene manualmente.
+Opcionalmente, \btn{Plantilla vacía} genera el mismo archivo pero sin los
+valores numéricos, útil para que un proveedor lo llene manualmente.
 \end{pasobox}
 
 % =============================================================
 \chapter{Referencia de Campos y Comportamientos}
 % =============================================================
 
-\section{Estrategias de extracciÃ³n}
+\section{Estrategias de extracción}
 
 El motor intenta extraer el monto total en el siguiente orden de prioridad:
 
 \begin{enumerate}
   \item \textbf{Tabla nativa:} Analiza las tablas del PDF y busca la columna
-        ``Total''. Toma el valor mÃ¡ximo de la columna (no el primer valor).
-  \item \textbf{TriangulaciÃ³n:} Busca tripletas (Cantidad, Precio Unitario, Total)
+        ``Total''. Toma el valor máximo de la columna (no el primer valor).
+  \item \textbf{Triangulación:} Busca tripletas (Cantidad, Precio Unitario, Total)
         que satisfagan $Q \times PU \approx T$.
-  \item \textbf{OCR:} Si la pÃ¡gina no tiene texto nativo (PDF escaneado),
-        aplica reconocimiento Ã³ptico de caracteres.
+  \item \textbf{OCR:} Si la página no tiene texto nativo (PDF escaneado),
+        aplica reconocimiento óptico de caracteres.
   \item \textbf{Pares adyacentes (G3):} Busca etiquetas como ``Total'',
-        ``Importe total'' o ``Es de \$X'' y toma el nÃºmero mÃ¡s cercano.
-  \item \textbf{BÃºsqueda textual:} Extrae nÃºmeros con patrÃ³n monetario
+        ``Importe total'' o ``Es de \$X'' y toma el número más cercano.
+  \item \textbf{Búsqueda textual:} Extrae números con patrón monetario
         (\texttt{\$X,XXX.XX}) en contexto de palabras clave financieras.
 \end{enumerate}
 
@@ -657,42 +657,42 @@ El motor intenta extraer el monto total en el siguiente orden de prioridad:
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{Tipo} & \textbf{DescripciÃ³n y comportamiento} \\
+    \textbf{Tipo} & \textbf{Descripción y comportamiento} \\
     \midrule
-    SÃ­        & IVA desglosado en el documento. Se toma el subtotal sin IVA y el total con IVA directamente. \\
+    Sí        & IVA desglosado en el documento. Se toma el subtotal sin IVA y el total con IVA directamente. \\
     Incluido  & El total ya incluye IVA. El motor descompone: $\text{Sub} = T / 1.16$;
                 $\text{IVA} = T - \text{Sub}$. \\
-    Exento    & El concepto no causa IVA (ej. servicios mÃ©dicos, educaciÃ³n).
+    Exento    & El concepto no causa IVA (ej. servicios médicos, educación).
                 IVA 16\% = \$0. \\
-    N/M       & No mencionado. El motor no encontrÃ³ indicaciÃ³n de IVA. Revisa manualmente. \\
+    N/M       & No mencionado. El motor no encontró indicación de IVA. Revisa manualmente. \\
     \bottomrule
   \end{tabularx}
-  \caption{Tipos de IVA y su comportamiento en el cÃ¡lculo.}
+  \caption{Tipos de IVA y su comportamiento en el cálculo.}
 \end{table}
 
-\section{ConversiÃ³n de divisas}
+\section{Conversión de divisas}
 
 Cuando la moneda seleccionada es USD, EUR o CAD:
 
 \begin{enumerate}
-  \item El motor consulta la API del Banco de MÃ©xico usando el token configurado.
-  \item Obtiene la cotizaciÃ³n del dÃ­a anterior hÃ¡bil.
+  \item El motor consulta la API del Banco de México usando el token configurado.
+  \item Obtiene la cotización del día anterior hábil.
   \item Multiplica el monto por el tipo de cambio.
   \item La columna \campo{T. Cambio} muestra la divisa y la tasa usada.
 \end{enumerate}
 
 \begin{consejobox}
-Los tipos de cambio se almacenan en cachÃ© durante la sesiÃ³n. Si necesitas
+Los tipos de cambio se almacenan en caché durante la sesión. Si necesitas
 actualizar el tipo de cambio con un token nuevo sin perder tus ediciones,
-usa el botÃ³n \btn{Aplicar} ubicado junto al campo de token en el panel
-lateral. Este botÃ³n solo recalcula las celdas en divisa extranjera que
-aÃºn no han sido confirmadas manualmente.
+usa el botón \btn{Aplicar} ubicado junto al campo de token en el panel
+lateral. Este botón solo recalcula las celdas en divisa extranjera que
+aún no han sido confirmadas manualmente.
 \end{consejobox}
 
 \section{La columna Observaciones}
 
-El campo \campo{Observaciones} es generado automÃ¡ticamente por el motor de
-extracciÃ³n. Algunos mensajes comunes:
+El campo \campo{Observaciones} es generado automáticamente por el motor de
+extracción. Algunos mensajes comunes:
 
 \begin{table}[H]
   \centering
@@ -700,144 +700,144 @@ extracciÃ³n. Algunos mensajes comunes:
     \toprule
     \textbf{Mensaje} & \textbf{Significado} \\
     \midrule
-    IVA Incluido             & El total encontrado ya tenÃ­a IVA; se descompuso al 16\%. \\
+    IVA Incluido             & El total encontrado ya tenía IVA; se descompuso al 16\%. \\
     IVA desglosado           & Se encontraron subtotal e IVA separados en el documento. \\
-    IVA descompuesto del total & El motor calculÃ³ el IVA a partir del total detectado. \\
-    Total (lÃ­nea adyacente)  & El total se tomÃ³ de la lÃ­nea inmediata al renglÃ³n con etiqueta ``Total''. \\
-    OCR                    & Se usÃ³ reconocimiento de caracteres (PDF escaneado); verificar valor. \\
-    Error:                   & FallÃ³ la extracciÃ³n; el valor debe capturarse manualmente. \\
+    IVA descompuesto del total & El motor calculó el IVA a partir del total detectado. \\
+    Total (línea adyacente)  & El total se tomó de la línea inmediata al renglón con etiqueta ``Total''. \\
+    OCR                    & Se usó reconocimiento de caracteres (PDF escaneado); verificar valor. \\
+    Error:                   & Falló la extracción; el valor debe capturarse manualmente. \\
     \bottomrule
   \end{tabularx}
   \caption{Mensajes comunes en la columna Observaciones.}
 \end{table}
 
 % =============================================================
-\chapter{GestiÃ³n de Proyectos (\texttt{.cshcp})}
+\chapter{Gestión de Proyectos (\texttt{.cshcp})}
 % =============================================================
 \label{ch:proyectos}
 
-Desde la versiÃ³n 6.5, el Conciliador permite guardar y cargar el estado
-completo de una sesiÃ³n de trabajo en un archivo con extensiÃ³n \texttt{.cshcp}
+Desde la versión 6.5, el Conciliador permite guardar y cargar el estado
+completo de una sesión de trabajo en un archivo con extensión \texttt{.cshcp}
 (Conciliador SHCP).
 
-\section{Â¿QuÃ© contiene un archivo .cshcp?}
+\section{¿Qué contiene un archivo .cshcp?}
 
-El archivo guarda en un Ãºnico documento portable:
+El archivo guarda en un único documento portable:
 
 \begin{itemize}
   \item Los PDFs cargados (incrustados en base64).
   \item El nombre del proyecto y el token de Banxico.
-  \item La configuraciÃ³n de todas las secciones (rangos, tipos, rutas).
+  \item La configuración de todas las secciones (rangos, tipos, rutas).
   \item La tabla completa de resultados con todas las ediciones manuales.
 \end{itemize}
 
 \begin{notabox}
-El archivo \texttt{.cshcp} es completamente autÃ³nomo. Puedes enviarlo por
-correo o copiarlo a una USB â€” quien lo reciba solo necesita el Conciliador
+El archivo \texttt{.cshcp} es completamente autónomo. Puedes enviarlo por
+correo o copiarlo a una USB — quien lo reciba solo necesita el Conciliador
 v6.6 para abrirlo y continuar exactamente donde lo dejaste.
 \end{notabox}
 
 \section{Guardar un proyecto}
 
 \begin{enumerate}
-  \item \textbf{Primera vez:} Usa \textit{Archivo ←’ Guardar Proyecto...} o el
-        botÃ³n \btn{\textbf{[Guardar]}} en la barra superior. Se abrirÃ¡ un diÃ¡logo de
-        guardado para elegir nombre y ubicaciÃ³n.
-  \item \textbf{Guardado rÃ¡pido:} Una vez que el proyecto tiene un archivo
+  \item \textbf{Primera vez:} Usa \textit{Archivo → Guardar Proyecto...} o el
+        botón \btn{\textbf{[Guardar]}} en la barra superior. Se abrirá un diálogo de
+        guardado para elegir nombre y ubicación.
+  \item \textbf{Guardado rápido:} Una vez que el proyecto tiene un archivo
         asociado, presiona \btn{\textbf{[Guardar]}} en cualquier momento. El archivo
         se sobreescribe en segundo plano; la barra de estado confirma
-        \textit{Â«Guardado: â€¦Â»} al terminar sin interrumpir tu trabajo.
+        \textit{«Guardado: …»} al terminar sin interrumpir tu trabajo.
 \end{enumerate}
 
 \begin{warningbox}
-Durante el guardado el botÃ³n \btn{\textbf{[Guardar]}} se deshabilita brevemente para
-evitar guardados duplicados. Si no ves la confirmaciÃ³n en la barra de estado
-espera un segundo; los proyectos con PDFs grandes pueden tardar mÃ¡s.
+Durante el guardado el botón \btn{\textbf{[Guardar]}} se deshabilita brevemente para
+evitar guardados duplicados. Si no ves la confirmación en la barra de estado
+espera un segundo; los proyectos con PDFs grandes pueden tardar más.
 \end{warningbox}
 
 \section{Cargar un proyecto}
 
 \begin{enumerate}
-  \item Ve a \textit{Archivo ←’ Cargar Proyecto...}.
+  \item Ve a \textit{Archivo → Cargar Proyecto...}.
   \item Selecciona el archivo \texttt{.cshcp} deseado.
-  \item La aplicaciÃ³n restaura los PDFs, secciones y tabla automÃ¡ticamente.
+  \item La aplicación restaura los PDFs, secciones y tabla automáticamente.
 \end{enumerate}
 
 \begin{notabox}
-No es necesario cargar los PDFs por separado; estÃ¡n incluidos dentro del
+No es necesario cargar los PDFs por separado; están incluidos dentro del
 propio archivo \texttt{.cshcp}.
 \end{notabox}
 
 % =============================================================
-\chapter{SoluciÃ³n de Problemas}
+\chapter{Solución de Problemas}
 % =============================================================
 
-\section{La aplicaciÃ³n no arranca}
+\section{La aplicación no arranca}
 
 \begin{itemize}
-  \item Verifica que la carpeta \texttt{\_internal} estÃ© junto al ejecutable.
-  \item Si aparece el error de SmartScreen, haz clic en \textbf{MÃ¡s informaciÃ³n}
-        ←’ \textbf{Ejecutar de todas formas}.
-  \item Si el antivirus bloquea la app, agrega una excepciÃ³n para la carpeta
+  \item Verifica que la carpeta \texttt{\_internal} esté junto al ejecutable.
+  \item Si aparece el error de SmartScreen, haz clic en \textbf{Más información}
+        → \textbf{Ejecutar de todas formas}.
+  \item Si el antivirus bloquea la app, agrega una excepción para la carpeta
         \texttt{Conciliador}.
 \end{itemize}
 
 \section{No extrae el monto correcto}
 
 \begin{enumerate}
-  \item Verifica que el rango de pÃ¡ginas estÃ© correctamente configurado â€”
-        la pÃ¡gina donde aparece el total debe estar dentro del rango.
-  \item Si el PDF estÃ¡ escaneado (imagen), la extracciÃ³n depende del OCR.
+  \item Verifica que el rango de páginas esté correctamente configurado —
+        la página donde aparece el total debe estar dentro del rango.
+  \item Si el PDF está escaneado (imagen), la extracción depende del OCR.
         La calidad del escaneo afecta el resultado.
-  \item Revisa la columna \campo{Observaciones} para entender quÃ© estrategia
-        se usÃ³ y por quÃ©.
-  \item Como Ãºltimo recurso, edita manualmente la celda de \campo{Total con IVA}.
+  \item Revisa la columna \campo{Observaciones} para entender qué estrategia
+        se usó y por qué.
+  \item Como último recurso, edita manualmente la celda de \campo{Total con IVA}.
 \end{enumerate}
 
 \begin{warningbox}
-Los PDFs con tablas complejas, mÃºltiples subtotales o montos en imÃ¡genes
-incrustadas pueden requerir ajuste manual del rango de pÃ¡ginas o correcciÃ³n
-del valor extraÃ­do.
+Los PDFs con tablas complejas, múltiples subtotales o montos en imágenes
+incrustadas pueden requerir ajuste manual del rango de páginas o corrección
+del valor extraído.
 \end{warningbox}
 
 \section{La barra de scroll del panel lateral no aparece}
 
-La barra de desplazamiento vertical del panel lateral aparece automÃ¡ticamente
+La barra de desplazamiento vertical del panel lateral aparece automáticamente
 cuando el contenido es mayor que la ventana. Si no aparece:
 
 \begin{itemize}
-  \item AsegÃºrate de que la ventana principal tenga al menos 700 px de alto.
+  \item Asegúrate de que la ventana principal tenga al menos 700 px de alto.
   \item Arrastra el borde inferior de la ventana para agrandarla.
 \end{itemize}
 
 \section{El scroll cambia valores de la tabla por error}
 
-Si al deslizar los dedos en el touchpad (o la rueda del ratÃ³n) sobre el
+Si al deslizar los dedos en el touchpad (o la rueda del ratón) sobre el
 panel lateral o la tabla de resultados se modifican inadvertidamente los
-menÃºs desplegables (Tipo, Moneda) o el contador de secciones:
+menús desplegables (Tipo, Moneda) o el contador de secciones:
 
 \begin{itemize}
-  \item Este comportamiento estÃ¡ \textbf{corregido en v6.6}. Todos los
-        controles desplegables y numÃ©ricos ignoran el scroll del dispositivo
-        apuntador; solo cambian cuando se hace clic explÃ­cito sobre ellos.
-  \item Si usas una versiÃ³n anterior, actualiza a v6.6.
+  \item Este comportamiento está \textbf{corregido en v6.6}. Todos los
+        controles desplegables y numéricos ignoran el scroll del dispositivo
+        apuntador; solo cambian cuando se hace clic explícito sobre ellos.
+  \item Si usas una versión anterior, actualiza a v6.6.
 \end{itemize}
 
 \section{Error de Token Banxico}
 
 \begin{itemize}
-  \item Verifica que el token copiado estÃ© completo (son cadenas largas
-        de letras y nÃºmeros).
+  \item Verifica que el token copiado esté completo (son cadenas largas
+        de letras y números).
   \item Los tokens de Banxico tienen vigencia limitada; genera uno nuevo si
-        han pasado mÃ¡s de 6 meses.
-  \item Sin internet, la consulta fallarÃ¡ silenciosamente y el monto se
-        reportarÃ¡ en la divisa original.
+        han pasado más de 6 meses.
+  \item Sin internet, la consulta fallará silenciosamente y el monto se
+        reportará en la divisa original.
 \end{itemize}
 
 \section{El archivo Excel no se genera}
 
 \begin{itemize}
-  \item AsegÃºrate de que no haya otro proceso abriendo el archivo de destino.
+  \item Asegúrate de que no haya otro proceso abriendo el archivo de destino.
   \item La ruta de destino debe existir y tener permisos de escritura.
   \item No uses caracteres especiales (\texttt{< > : " / \textbackslash{} | ? *})
         en el nombre del archivo.
@@ -849,43 +849,43 @@ menÃºs desplegables (Tipo, Moneda) o el contador de secciones:
 
 \begin{description}[leftmargin=0pt, style=nextline]
 
-\item[Â¿Puedo procesar PDFs escaneados?]
-SÃ­, pero la precisiÃ³n depende de la calidad del escaneo. El motor usa OCR
+\item[¿Puedo procesar PDFs escaneados?]
+Sí, pero la precisión depende de la calidad del escaneo. El motor usa OCR
 como estrategia de respaldo. Para mejores resultados, usa PDFs nativos
 (generados digitalmente, no escaneados).
 
-\item[Â¿CuÃ¡ntos PDFs puedo cargar simultÃ¡neamente?]
-No hay lÃ­mite tÃ©cnico de archivos, pero el procesamiento es secuencial
-(una secciÃ³n a la vez). Con mÃ¡s de 20 PDFs grandes el proceso puede tardar
+\item[¿Cuántos PDFs puedo cargar simultáneamente?]
+No hay límite técnico de archivos, pero el procesamiento es secuencial
+(una sección a la vez). Con más de 20 PDFs grandes el proceso puede tardar
 varios minutos.
 
-\item[Â¿QuÃ© pasa si dos secciones apuntan al mismo rango de pÃ¡ginas?]
-El motor procesa cada secciÃ³n de forma independiente. Dos secciones pueden
-apuntar al mismo PDF y rango; cada una generarÃ¡ su propia fila en la tabla.
+\item[¿Qué pasa si dos secciones apuntan al mismo rango de páginas?]
+El motor procesa cada sección de forma independiente. Dos secciones pueden
+apuntar al mismo PDF y rango; cada una generará su propia fila en la tabla.
 
-\item[Â¿Puedo editar los datos antes de exportar?]
-SÃ­. Todas las celdas (excepto \campo{Diferencia final}) son editables con
-doble clic. Los KPIs y la diferencia se recalculan automÃ¡ticamente.
+\item[¿Puedo editar los datos antes de exportar?]
+Sí. Todas las celdas (excepto \campo{Diferencia final}) son editables con
+doble clic. Los KPIs y la diferencia se recalculan automáticamente.
 
-\item[Â¿El programa guarda mis configuraciones?]
-SÃ­. Desde la versiÃ³n 6.5 puedes guardar el estado completo (PDFs, secciones,
-tabla y token) en un archivo \texttt{.cshcp} con el botÃ³n \btn{\textbf{[Guardar]}}
-de la barra superior o desde \textit{Archivo ←’ Guardar Proyecto...}.
+\item[¿El programa guarda mis configuraciones?]
+Sí. Desde la versión 6.5 puedes guardar el estado completo (PDFs, secciones,
+tabla y token) en un archivo \texttt{.cshcp} con el botón \btn{\textbf{[Guardar]}}
+de la barra superior o desde \textit{Archivo → Guardar Proyecto...}.
 Al reabrir el archivo todo queda exactamente como lo dejaste.
-Ver \hyperref[ch:proyectos]{CapÃ­tulo~\ref{ch:proyectos}} para mÃ¡s detalles.
+Ver \hyperref[ch:proyectos]{Capítulo~\ref{ch:proyectos}} para más detalles.
 
-\item[Â¿Funciona sin internet?]
-SÃ­, con la excepciÃ³n de la consulta del tipo de cambio a Banxico.
-La extracciÃ³n de montos y exportaciÃ³n a Excel funcionan sin conexiÃ³n.
+\item[¿Funciona sin internet?]
+Sí, con la excepción de la consulta del tipo de cambio a Banxico.
+La extracción de montos y exportación a Excel funcionan sin conexión.
 
-\item[Â¿QuÃ© formatos de fecha reconoce?]
-El motor detecta fechas en espaÃ±ol (``15 de enero de 2026''), formato ISO
-(``2026-01-15'') y formato numÃ©rico con separadores (``15/01/2026'').
+\item[¿Qué formatos de fecha reconoce?]
+El motor detecta fechas en español (``15 de enero de 2026''), formato ISO
+(``2026-01-15'') y formato numérico con separadores (``15/01/2026'').
 
 \end{description}
 
 % =============================================================
-\chapter{ApÃ©ndice TÃ©cnico}
+\chapter{Apéndice Técnico}
 % =============================================================
 
 \section{Arquitectura del sistema}
@@ -894,15 +894,15 @@ El motor detecta fechas en espaÃ±ol (``15 de enero de 2026''), formato ISO
   \centering
   \begin{tabularx}{\linewidth}{lX}
     \toprule
-    \textbf{MÃ³dulo} & \textbf{Responsabilidad} \\
+    \textbf{Módulo} & \textbf{Responsabilidad} \\
     \midrule
-    \texttt{engine.py}   & Motor de extracciÃ³n puro. Contiene toda la lÃ³gica de
-                           negocio: anÃ¡lisis de PDF, OCR, Banxico, generaciÃ³n de Excel. \\
-    \texttt{main\_qt.py} & Interfaz grÃ¡fica PyQt6. Gestiona la UI, workers de fondo
-                           y comunicaciÃ³n entre componentes. \\
+    \texttt{engine.py}   & Motor de extracción puro. Contiene toda la lógica de
+                           negocio: análisis de PDF, OCR, Banxico, generación de Excel. \\
+    \texttt{main\_qt.py} & Interfaz gráfica PyQt6. Gestiona la UI, workers de fondo
+                           y comunicación entre componentes. \\
     \bottomrule
   \end{tabularx}
-  \caption{MÃ³dulos principales de la aplicaciÃ³n.}
+  \caption{Módulos principales de la aplicación.}
 \end{table}
 
 \section{Dependencias incluidas}
@@ -911,19 +911,19 @@ El motor detecta fechas en espaÃ±ol (``15 de enero de 2026''), formato ISO
   \centering
   \begin{tabularx}{\linewidth}{llX}
     \toprule
-    \textbf{Paquete} & \textbf{VersiÃ³n} & \textbf{Uso} \\
+    \textbf{Paquete} & \textbf{Versión} & \textbf{Uso} \\
     \midrule
-    PyQt6         & $\geq$6.7  & Interfaz grÃ¡fica nativa \\
-    PyMuPDF       & $\geq$1.24 & Renderizado y extracciÃ³n de texto PDF \\
-    pdfplumber    & $\geq$0.11 & AnÃ¡lisis estructural de tablas PDF \\
-    pandas        & $\geq$2.2  & ManipulaciÃ³n de datos tabulares \\
-    numpy         & $\geq$2.0  & Operaciones numÃ©ricas \\
-    openpyxl      & $\geq$3.1  & GeneraciÃ³n de archivos Excel \\
+    PyQt6         & $\geq$6.7  & Interfaz gráfica nativa \\
+    PyMuPDF       & $\geq$1.24 & Renderizado y extracción de texto PDF \\
+    pdfplumber    & $\geq$0.11 & Análisis estructural de tablas PDF \\
+    pandas        & $\geq$2.2  & Manipulación de datos tabulares \\
+    numpy         & $\geq$2.0  & Operaciones numéricas \\
+    openpyxl      & $\geq$3.1  & Generación de archivos Excel \\
     rapidocr      & 1.2.x      & OCR para PDFs escaneados (Python 3.14) \\
     requests      & $\geq$2.31 & Consultas HTTP a la API de Banxico \\
     \bottomrule
   \end{tabularx}
-  \caption{Dependencias de la aplicaciÃ³n (incluidas en la carpeta \texttt{\_internal}).}
+  \caption{Dependencias de la aplicación (incluidas en la carpeta \texttt{\_internal}).}
 \end{table}
 
 \section{Expresiones regulares principales}
@@ -931,7 +931,7 @@ El motor detecta fechas en espaÃ±ol (``15 de enero de 2026''), formato ISO
 El motor identifica montos con los siguientes patrones:
 
 \begin{rutabox}
-\# Montos con sÃ­mbolo de peso\\
+\# Montos con símbolo de peso\\
 \$\textbackslash{}s*[\textbackslash{}d,]+(?:\textbackslash{}.\textbackslash{}d\{1,2\})?\\[4pt]
 \# Montos con separador de miles (1,234,567.89)\\
 (?<!\textbackslash{}d)[\textbackslash{}d]\{1,3\}(?:,\textbackslash{}d\{3\})+(?:\textbackslash{}.\textbackslash{}d\{1,2\})?\\[4pt]
@@ -939,7 +939,7 @@ El motor identifica montos con los siguientes patrones:
 (?<!\textbackslash{}d)\textbackslash{}d\{1,9\}\textbackslash{}.\textbackslash{}d\{2\}(?!\textbackslash{}d)
 \end{rutabox}
 
-% â”€â”€ Contraportada â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+% ── Contraportada ─────────────────────────────────────────
 \clearpage
 \thispagestyle{empty}
 \pagecolor{white}
@@ -948,7 +948,7 @@ El motor identifica montos con los siguientes patrones:
   {\color{vino}\rule{0.6\linewidth}{1pt}}\\[12pt]
   {\color{vino}\large Conciliador de Cotizaciones v6.6}\\[6pt]
   {\color{vino}\small Manual de Usuario}\\[6pt]
-  {\color{vino}\small SHCP - UPIT Â· \today}\\[12pt]
+  {\color{vino}\small SHCP - UPIT · \today}\\[12pt]
   {\color{vino}\rule{0.6\linewidth}{1pt}}
 \end{center}
 \vspace*{\fill}
