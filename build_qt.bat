@@ -19,14 +19,14 @@ REM -- Verificar Python ----------------------------------------
 if errorlevel 1 (
     echo [Error] Python no encontrado en PATH.
     echo         Instala Python %PYVER_REQ% desde python.org
-    pause & exit /b 1
+    exit /b 1
 )
 
 REM -- Crear / activar virtualenv ------------------------------
 if not exist %VENV% (
     echo [1/5] Creando entorno virtual %VENV%...
     %PYTHON% -m venv %VENV%
-    if errorlevel 1 ( echo [Error] Fallo al crear venv & pause & exit /b 1 )
+    if errorlevel 1 ( echo [Error] Fallo al crear venv & exit /b 1 )
 ) else (
     echo [1/5] Usando entorno existente %VENV%
 )
@@ -35,12 +35,12 @@ call %VENV%\Scripts\activate.bat
 
 REM -- Actualizar pip ------------------------------------------
 echo [2/5] Actualizando pip...
-python -m pip install --upgrade pip --quiet
+python -m pip install --upgrade pip
 
 REM -- Instalar dependencias -----------------------------------
 echo [3/5] Instalando dependencias...
-pip install -r requirements_qt.txt --quiet
-if errorlevel 1 ( echo [Error] Fallo al instalar dependencias & pause & exit /b 1 )
+pip install -r requirements_qt.txt
+if errorlevel 1 ( echo [Error] Fallo al instalar dependencias & exit /b 1 )
 
 REM -- Limpiar artefactos anteriores ---------------------------
 echo [4/5] Limpiando builds anteriores...
@@ -50,7 +50,7 @@ if exist build\Conciliador rmdir /s /q build\Conciliador
 REM -- Compilar ------------------------------------------------
 echo [5/5] Compilando con PyInstaller...
 pyinstaller conciliador_qt.spec --noconfirm --clean
-if errorlevel 1 ( echo [Error] Fallo en PyInstaller & pause & exit /b 1 )
+if errorlevel 1 ( echo [Error] Fallo en PyInstaller & exit /b 1 )
 
 echo.
 echo ============================================================
@@ -63,4 +63,4 @@ if exist dist\Conciliador (
     explorer dist\Conciliador
 )
 
-pause
+
