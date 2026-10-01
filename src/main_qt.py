@@ -1,6 +1,6 @@
 # ============================================================
 # CONCILIADOR DE COTIZACIONES  |  main_qt.py  v6.6
-    # ============================================================
+# ============================================================
 from __future__ import annotations
 
 import datetime
@@ -9,19 +9,19 @@ import sys
 
 import pandas as pd
 from PyQt6.QtCore import (
-    QByteArray, QSize, Qt, QThread, pyqtSignal, QEvent
+    QByteArray, QSize, Qt, QThread, pyqtSignal
 )
 from PyQt6.QtGui import (
-    QColor, QFont, QIcon, QPalette, QPixmap, QTransform
+    QColor, QPixmap, QTransform
 )
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog,
-    QDialogButtonBox, QFileDialog, QFormLayout,
+    QApplication, QComboBox,
+    QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QListWidget, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QSplitter, QStackedWidget, QStatusBar, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSpinBox,
+    QSplitter, QStatusBar, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
 )
 
@@ -1145,7 +1145,6 @@ class DataPanel(QWidget):
         self._build()
 
     def get_state(self) -> dict:
-        import pandas as pd
         import json
         df_dict = json.loads(self._df.to_json(orient="records", date_format="iso")) if self._df is not None else None
         # Convert set of tuples to list of lists for JSON serialization
@@ -1608,7 +1607,6 @@ class DataPanel(QWidget):
         self.lbl_warnings.setText((cur + "\n" if cur else "") + f"⚠ {msg}")
         self.lbl_warnings.setVisible(True)
         if hasattr(self, 'warnings_scroll'): self.warnings_scroll.setVisible(True)
-        if hasattr(self, 'warnings_scroll'): self.warnings_scroll.setVisible(True)
 
     def _export_excel(self):
         if self._df is None:
@@ -1769,8 +1767,6 @@ class MainWindow(QMainWindow):
         self.main_splitter.addWidget(right_widget)
         self.main_splitter.setSizes([280, 800])
         h_main.addWidget(self.main_splitter)
-        h_main.addWidget(self.config_panel)
-        h_main.addWidget(right_widget, stretch=1)
 
     # ── Carga de PDF ──────────────────────────────────────────
     def _on_pdf_loaded(self):

@@ -25,18 +25,14 @@ dist/
 # *.pdf
 # *.xlsx
 
-# LaTeX files
+# LaTeX auxiliares
 *.aux
-*.log
 *.out
 *.toc
-#   E j e c u t a b l e   c o m p i l a d o   -   d e m a s i a d o   g r a n d e   p a r a   G i t H u b   ( > 1 0 0 M B )  
- 
-ConciliadorSHCP_v6.1.zip
-dist/
-build/
-*.spec
-*.zip
+*.snm
+*.nav
 
-# Tesseract Mini binaries (goes in Releases, not in repo)
+# Ejecutable compilado y ZIPs (demasiado grandes para GitHub, >100 MB)
+# Usar GitHub Releases para distribuir el .exe
+*.zip
 bin/tesseract/
