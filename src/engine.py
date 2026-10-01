@@ -870,7 +870,7 @@ def extract(
             if not _MONETARY_CTX.search(ln):
                 continue
             for m in _MONEY_RE.finditer(ln):
-                raw = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+                raw = m.group(1) or m.group(2) or m.group(3) or m.group(4) or m.group(5)
                 if raw:
                     try:
                         v = float(raw.replace(",", ""))
