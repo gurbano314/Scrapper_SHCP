@@ -625,6 +625,33 @@ class ConfigPanel(QWidget):
         self.le_proyecto = QLineEdit()
         self.le_proyecto.setPlaceholderText("Nombre del proyecto…")
         fl.addRow("Nombre:", self.le_proyecto)
+
+        # Fecha de solicitud (para validar vigencia de cotizaciones)
+        from PyQt6.QtWidgets import QDateEdit
+        from PyQt6.QtCore import QDate
+        self.de_fecha_solicitud = QDateEdit()
+        self.de_fecha_solicitud.setCalendarPopup(True)
+        self.de_fecha_solicitud.setDate(QDate.currentDate())
+        self.de_fecha_solicitud.setDisplayFormat("dd/MM/yyyy")
+        self.de_fecha_solicitud.setToolTip(
+            "Fecha de solicitud del proyecto.\n"
+            "Se usa para validar que las cotizaciones\n"
+            "no excedan 3 meses de vigencia (Lineamiento 2)."
+        )
+        fl.addRow("Fecha solicitud:", self.de_fecha_solicitud)
+
+        # PII exclusivamente de equipo
+        from PyQt6.QtWidgets import QCheckBox
+        self.chk_pii_equipo = QCheckBox("PII solo compra de equipo")
+        self.chk_pii_equipo.setToolTip(
+            "Marcar si el PII es exclusivamente de\n"
+            "compra de equipo deportivo. En ese caso,\n"
+            "no se permiten gastos administrativos\n"
+            "(Lineamiento 3, pág. 11)."
+        )
+        self.chk_pii_equipo.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        fl.addRow("", self.chk_pii_equipo)
+
         main.addWidget(grp_proy)
 
         # ── Banxico ───────────────────────────────────────────
@@ -834,6 +861,8 @@ class ConfigPanel(QWidget):
         return {
             "proyecto": self.le_proyecto.text(),
             "token": self.le_token.text(),
+            "fecha_solicitud": self.de_fecha_solicitud.date().toString("yyyy-MM-dd"),
+            "pii_solo_equipo": self.chk_pii_equipo.isChecked(),
             "pdf_files": pdfs,
             "secciones": [sw.get_config() for sw in self._sec_widgets]
         }
@@ -844,6 +873,13 @@ class ConfigPanel(QWidget):
             self.le_proyecto.setText(state["proyecto"])
         if "token" in state:
             self.le_token.setText(state["token"])
+        if "fecha_solicitud" in state:
+            from PyQt6.QtCore import QDate
+            d = QDate.fromString(state["fecha_solicitud"], "yyyy-MM-dd")
+            if d.isValid():
+                self.de_fecha_solicitud.setDate(d)
+        if "pii_solo_equipo" in state:
+            self.chk_pii_equipo.setChecked(state["pii_solo_equipo"])
         
         # Cargar PDFs PRIMERO para que los spinboxes tengan los límites correctos
         if "pdf_files" in state:
@@ -1837,8 +1873,24 @@ class MainWindow(QMainWindow):
                     
         df_new = engine.recalc_derived(df_new)
         self.data_panel.load_data(df_new, self.config_panel.get_proyecto(), self.config_panel.le_token.text().strip())
+
+        # ── Validación Normativa EFIDEPORTE ──────────────────
+        import datetime as _dt
+        qd = self.config_panel.de_fecha_solicitud.date()
+        fecha_sol = _dt.date(qd.year(), qd.month(), qd.day())
+        pii_equipo = self.config_panel.chk_pii_equipo.isChecked()
+        norm_warnings = engine.validate_normative(
+            df_new,
+            fecha_solicitud=fecha_sol,
+            pii_solo_equipo=pii_equipo,
+        )
+        for w in norm_warnings:
+            self.data_panel.add_warning(w)
+
+        n_norm = len(norm_warnings)
         self.status.showMessage(
             f"Extracción completa · {len(results)} sección(es) procesada(s)"
+            + (f" · {n_norm} alerta(s) normativa(s)" if n_norm else " · ✅ Sin alertas normativas")
         )
 
     def _toggle_sidebar(self):

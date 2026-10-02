@@ -139,6 +139,180 @@ _BX_CACHE: dict[tuple, Optional[float]] = {}
 _ocr_engine = None
 _ocr_available: Optional[bool] = None   # None = no determinado aún
 
+# ─────────────────────────────────────────────────────────────
+# VALIDACIÓN NORMATIVA — Lineamientos EFIDEPORTE
+# ─────────────────────────────────────────────────────────────
+MAX_VIGENCIA_DIAS = 90  # Cotizaciones vigentes ≤ 3 meses
+TOPE_ADMIN_PCT    = 0.05  # Gastos administrativos ≤ 5%
+
+_ADMIN_KEYWORDS_RE = re.compile(
+    r"papeler[ií]a|renta\s+de\s+oficina|servicios?\s+administrat"
+    r"|gasto\s+administrat|compra\s+de\s+papeler"
+    r"|art[ií]culos?\s+de\s+oficina|material\s+de\s+oficina"
+    r"|honorarios?\s+del?\s+(?:contador|profesional|auditor)"
+    r"|servicio\s+de\s+limpieza|agua\s+potable|luz\s+el[eé]ctrica"
+    r"|tel[eé]fono|internet\s+oficina|mensajer[ií]a",
+    re.IGNORECASE,
+)
+_RUBROS_PROHIBIDOS_RE = re.compile(
+    r"otros\s+gastos|imprevistos|gastos\s+varios"
+    r"|pr[eé]stamo|anticipo\s+de\s+n[oó]mina"
+    r"|gesti[oó]n\s+de\s+recursos|honorarios?\s+por\s+gesti[oó]n"
+    r"|ganancia\s+propia|utilidad\s+del\s+proyecto"
+    r"|servicios?\s+imprecis|concepto\s+gen[eé]rico",
+    re.IGNORECASE,
+)
+_SEGURO_RE = re.compile(
+    r"seguro|p[oó]liza\s+de\s+(?:seguro|cobertura|responsabilidad)"
+    r"|cobertura\s+(?:total|contra\s+siniestro|del?\s+proyecto)"
+    r"|prima\s+de\s+seguro",
+    re.IGNORECASE,
+)
+_EQUIPO_RE = re.compile(
+    r"equipo|aparato|maquinaria|instrumento|implemento"
+    r"|bicicleta|bal[oó]n|raqueta|arco|rifle|pistola|kayak"
+    r"|canoa|tabla|vela|esquí|trampolín",
+    re.IGNORECASE,
+)
+
+
+def validate_normative(
+    df: pd.DataFrame,
+    fecha_solicitud: Optional[datetime.date] = None,
+    pii_solo_equipo: bool = False,
+) -> list[str]:
+    """
+    Ejecuta las 7 validaciones normativas de EFIDEPORTE sobre el DataFrame
+    de resultados. Retorna una lista de advertencias textuales.
+
+    Validaciones:
+    1. Vigencia de cotizaciones (≤ 3 meses)
+    2. Tope gastos administrativos ≤ 5%
+    3. Detección de rubros prohibidos
+    4. Detección de duplicados
+    5. Verificación de seguro obligatorio
+    6. PII solo equipo → sin gastos administrativos
+    7. Aportación en especie sin CFDI (informativa)
+    """
+    if df is None or df.empty:
+        return []
+
+    warnings: list[str] = []
+    df_norm = _normalize_editor_df(df)
+    if df_norm.empty:
+        return []
+
+    # ── 1. Vigencia de cotizaciones ──────────────────────────
+    if fecha_solicitud is not None:
+        for idx, row in df_norm.iterrows():
+            tipo = str(row.get("Tipo", "")).strip()
+            if tipo != "Cotización Proveedor":
+                continue
+            fecha_str = str(row.get("Fecha", "")).strip()
+            if not fecha_str:
+                continue
+            try:
+                fecha_cot = datetime.date.fromisoformat(fecha_str)
+                delta = (fecha_solicitud - fecha_cot).days
+                if delta > MAX_VIGENCIA_DIAS:
+                    rubro = str(row.get("Rubro", f"Fila {idx+1}"))
+                    warnings.append(
+                        f"📅 «{rubro}»: Cotización con fecha {fecha_str} "
+                        f"excede los 3 meses de vigencia ({delta} días). "
+                        f"— Lineamiento 2, pág. 10"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+    # ── 2. Tope gastos administrativos ≤ 5% ──────────────────
+    total_global = pd.to_numeric(df_norm["Total con IVA"], errors="coerce").sum()
+    admin_total = 0.0
+    admin_rubros: list[str] = []
+    for idx, row in df_norm.iterrows():
+        rubro = str(row.get("Rubro", ""))
+        if _ADMIN_KEYWORDS_RE.search(rubro):
+            monto = _safe_f(row.get("Total con IVA"))
+            if monto:
+                admin_total += monto
+                admin_rubros.append(rubro)
+
+    if total_global > 0 and admin_total > 0:
+        pct = admin_total / total_global
+        if pct > TOPE_ADMIN_PCT:
+            warnings.append(
+                f"🚫 Gastos administrativos ({pct:.1%}) exceden el tope "
+                f"del 5% del presupuesto total. "
+                f"Monto admin: ${admin_total:,.2f} / Total: ${total_global:,.2f}. "
+                f"Rubros: {', '.join(admin_rubros[:5])}. "
+                f"— Lineamiento 3, pág. 11"
+            )
+
+    # ── 3. Detección de rubros prohibidos ────────────────────
+    for idx, row in df_norm.iterrows():
+        rubro = str(row.get("Rubro", ""))
+        if _RUBROS_PROHIBIDOS_RE.search(rubro):
+            warnings.append(
+                f"🚫 «{rubro}»: Rubro potencialmente no elegible para "
+                f"estímulo fiscal. Verificar que no sea impreciso, duplicado "
+                f"o de gestión de recursos. — Lineamiento 10, pág. 11-12"
+            )
+
+    # ── 4. Detección de duplicados ───────────────────────────
+    rubros_vistos: list[tuple[str, float, int]] = []  # (rubro_lower, total, idx)
+    for idx, row in df_norm.iterrows():
+        rubro = str(row.get("Rubro", "")).strip().lower()
+        total = _safe_f(row.get("Total con IVA"))
+        if not rubro or total is None:
+            continue
+        for prev_rubro, prev_total, prev_idx in rubros_vistos:
+            # Comparar similitud simple
+            if prev_rubro == rubro and abs(total - prev_total) / max(total, 1) < 0.05:
+                warnings.append(
+                    f"⚠ Posible duplicado: «{row.get('Rubro', '')}» "
+                    f"(fila {idx+1}) tiene el mismo rubro y monto similar "
+                    f"a la fila {prev_idx+1} (${total:,.2f}). "
+                    f"— Lineamiento 10c, pág. 11"
+                )
+        rubros_vistos.append((rubro, total, idx))
+
+    # ── 5. Verificación de seguro obligatorio ────────────────
+    tiene_seguro = False
+    for idx, row in df_norm.iterrows():
+        rubro = str(row.get("Rubro", ""))
+        if _SEGURO_RE.search(rubro):
+            tiene_seguro = True
+            break
+    if not tiene_seguro and len(df_norm) >= 3:
+        warnings.append(
+            "📋 No se detectó un rubro de seguro en el presupuesto. "
+            "Los lineamientos exigen un seguro con cobertura total del "
+            "valor del PII o PAR contra cualquier siniestro. "
+            "— Lineamiento 1, pág. 10"
+        )
+
+    # ── 6. PII solo equipo → sin gastos administrativos ──────
+    if pii_solo_equipo and admin_rubros:
+        warnings.append(
+            f"🚫 PII exclusivamente de equipo: No se permiten gastos "
+            f"administrativos. Se detectaron: {', '.join(admin_rubros[:5])}. "
+            f"— Lineamiento 3, pág. 11"
+        )
+
+    # ── 7. Info: aportación en especie (recordatorio CFDI) ───
+    for idx, row in df_norm.iterrows():
+        rubro = str(row.get("Rubro", ""))
+        if _EQUIPO_RE.search(rubro):
+            tipo = str(row.get("Tipo", "")).strip()
+            if tipo == "Presupuesto Global":
+                continue
+            warnings.append(
+                f"📎 «{rubro}»: Si es aportación en especie (equipo), "
+                f"verificar que se cuente con el CFDI correspondiente "
+                f"y cotizaciones de valor comercial. — Lineamiento e), pág. 9"
+            )
+
+    return warnings
+
 
 # ─────────────────────────────────────────────────────────────
 # HELPERS
