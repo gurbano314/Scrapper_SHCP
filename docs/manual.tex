@@ -709,6 +709,46 @@ extracción. Algunos mensajes comunes:
 \end{table}
 
 % =============================================================
+\chapter{Validación Normativa EFIDEPORTE}
+% =============================================================
+\label{ch:normativa}
+
+A partir de la versión 6.6, el Conciliador incorpora un motor de \textbf{Validación Normativa Automatizada}. Esta función audita los resultados extraídos contra los Lineamientos de EFIDEPORTE en tiempo real, ayudando a prevenir errores que podrían resultar en observaciones o rechazos por parte de la SHCP.
+
+\section{Controles de Validación}
+
+En el panel lateral (dentro de la sección \textbf{Proyecto}) encontrarás dos controles clave:
+
+\begin{itemize}
+    \item \textbf{Fecha solicitud:} Indica la fecha en la que el proyecto será ingresado al sistema. Esta fecha se compara contra la fecha de emisión de cada cotización.
+    \item \textbf{PII solo compra de equipo:} Checkbox que debe marcarse si el proyecto de infraestructura (PII) es exclusivamente para compra de equipo deportivo (y por lo tanto, no puede incluir gastos administrativos).
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.6\linewidth]{./images/08_validacion_normativa.png}
+  \caption{Controles de validación normativa en el panel lateral.}
+\end{figure}
+
+\section{Reglas Auditadas Automáticamente}
+
+Al presionar el botón \btn{Extraer Montos}, el sistema ejecutará las siguientes 7 validaciones sobre la tabla generada:
+
+\begin{enumerate}
+    \item \textbf{Vigencia de cotizaciones (Regla 2, pág. 10):} Verifica que la fecha de la cotización no exceda 90 días respecto a la \textit{Fecha de solicitud}.
+    \item \textbf{Tope de Gastos Administrativos (Regla 3, pág. 11):} Detecta rubros administrativos (papelería, honorarios de contador, renta, servicios) y calcula si la suma excede el 5\% del presupuesto total.
+    \item \textbf{Rubros Prohibidos (Regla 10, pág. 11-12):} Escanea conceptos imprecisos o prohibidos como ``imprevistos'', ``gestión de recursos'', ``ganancia propia'' o ``préstamos''.
+    \item \textbf{Detección de Duplicados (Regla 10c, pág. 11):} Analiza si existen dos secciones/filas con descripciones idénticas y montos similares (diferencia menor al 5\%).
+    \item \textbf{Seguro Obligatorio (Regla 1, pág. 10):} Verifica la existencia de al menos un rubro que ampare la póliza de seguro de cobertura total del proyecto.
+    \item \textbf{PII solo equipo (Regla 3, pág. 11):} Si el checkbox está marcado, alerta inmediatamente si detecta gastos administrativos.
+    \item \textbf{Aportación en Especie y CFDI (Regla e, pág. 9):} Sugiere verificar la existencia de un CFDI si detecta la aportación de un bien o equipo (kayak, bicicleta, maquinaria, etc.).
+\end{enumerate}
+
+\begin{warningbox}
+Las alertas normativas aparecerán en el panel amarillo superior de la tabla de resultados. Un resumen (ej. ``3 alerta(s) normativa(s)'') se mostrará en la barra de estado inferior. Estas alertas \textbf{no} te impiden exportar el Excel, son estrictamente de carácter consultivo.
+\end{warningbox}
+
+% =============================================================
 \chapter{Gestión de Proyectos (\texttt{.cshcp})}
 % =============================================================
 \label{ch:proyectos}
