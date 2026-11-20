@@ -9,17 +9,17 @@ import sys
 
 import pandas as pd
 from PyQt6.QtCore import (
-    QByteArray, QSize, Qt, QThread, pyqtSignal
+    QByteArray, QDate, QSize, Qt, QThread, pyqtSignal
 )
 from PyQt6.QtGui import (
-    QColor, QPixmap, QTransform
+    QColor, QFontMetrics, QPixmap, QTransform
 )
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox,
+    QApplication, QCheckBox, QComboBox, QDateEdit, QDialog,
     QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QListWidget, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QScrollArea, QSpinBox,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox,
     QSplitter, QStatusBar, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
@@ -130,9 +130,9 @@ QPushButton#expander_btn {{
     text-align: left;
     background-color: transparent;
     border: none;
-    padding: 8px 10px;
+    padding: 6px 6px;
     font-weight: 600;
-    font-size: 13px;
+    font-size: 12px;
     color: {TEXT_MAIN};
     border-radius: 4px;
 }}
@@ -333,11 +333,12 @@ class ExtractWorker(QThread):
     warning  = pyqtSignal(str)
     finished = pyqtSignal(list)            # lista completa de dicts
 
-    def __init__(self, pdf_files: list, sec_cfgs: list, bx_token: str):
+    def __init__(self, pdf_files: list, sec_cfgs: list, bx_token: str, force_ocr: bool = False):
         super().__init__()
-        self._files  = pdf_files
-        self._cfgs   = sec_cfgs
-        self._token  = bx_token
+        self._files     = pdf_files
+        self._cfgs      = sec_cfgs
+        self._token     = bx_token
+        self._force_ocr = force_ocr
 
     def run(self):
         results = []
@@ -362,6 +363,7 @@ class ExtractWorker(QThread):
                     bx_token=self._token,
                     sec_num=i + 1,
                     on_warning=lambda m: self.warning.emit(m),
+                    force_ocr=self._force_ocr,
                 )
             except Exception as exc:
                 row = {
@@ -379,6 +381,255 @@ class ExtractWorker(QThread):
             results.append(row)
             self.row_done.emit(i, row)
         self.finished.emit(results)
+
+
+class AutoSectionWorker(QThread):
+    """Detecta automáticamente las secciones de un único PDF en segundo plano."""
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(list)
+    errored  = pyqtSignal(str)
+
+    def __init__(self, pdf_bytes: bytes, filename: str = ""):
+        super().__init__()
+        self._pdf_bytes = pdf_bytes
+        self._filename  = filename
+
+    def run(self):
+        try:
+            sections = engine.auto_detect_sections(
+                self._pdf_bytes,
+                filename=self._filename,
+                on_progress=lambda c, t, m: self.progress.emit(c, t, m),
+            )
+            self.finished.emit(sections)
+        except Exception as exc:
+            self.errored.emit(str(exc))
+
+
+class AutoSectionsDialog(QDialog):
+    """Diálogo interactivo para revisar, marcar/desmarcar y editar secciones auto-detectadas."""
+    page_preview_requested = pyqtSignal(int)  # 0-based
+
+    def __init__(self, sections: list[dict], filename: str, total_pages: int, parent=None):
+        super().__init__(parent)
+        self._sections = [dict(s) for s in sections]
+        self._filename = filename
+        self._total_pages = max(1, int(total_pages))
+        self._populating = False
+        self.setWindowTitle(f"Secciones detectadas — {filename}")
+        self.resize(920, 580)
+        self.setModal(True)
+        self._build()
+        self._populate()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        lbl_title = QLabel(f"✨ Secciones detectadas en «{self._filename}» ({self._total_pages} págs.)")
+        lbl_title.setObjectName("section_title")
+        layout.addWidget(lbl_title)
+
+        self.lbl_summary = QLabel("")
+        self.lbl_summary.setStyleSheet(f"color:{TEXT_MUTED}; font-size:12px;")
+        layout.addWidget(self.lbl_summary)
+
+        # Barra de selección rápida
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self.btn_sel_all = QPushButton("☑ Seleccionar todo")
+        self.btn_sel_none = QPushButton("☐ Deseleccionar todo")
+        self.btn_sel_quotes = QPushButton("📑 Solo presupuesto y cotizaciones")
+        self.btn_sel_all.clicked.connect(lambda: self._apply_quick_filter("all"))
+        self.btn_sel_none.clicked.connect(lambda: self._apply_quick_filter("none"))
+        self.btn_sel_quotes.clicked.connect(lambda: self._apply_quick_filter("quotes"))
+        bar.addWidget(self.btn_sel_all)
+        bar.addWidget(self.btn_sel_none)
+        bar.addWidget(self.btn_sel_quotes)
+        bar.addStretch()
+        lbl_tip = QLabel("Haz clic en una fila para previsualizar su página en el visor.")
+        lbl_tip.setStyleSheet(f"color:{TEXT_MUTED}; font-size:11px;")
+        bar.addWidget(lbl_tip)
+        layout.addLayout(bar)
+
+        # Tabla de secciones
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels([
+            "Usar", "#", "Tipo", "Pág. Ini", "Pág. Fin", "Rubro / Concepto", "Clasificación / Motivo"
+        ])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setColumnWidth(0, 48)
+        self.table.setColumnWidth(1, 38)
+        self.table.setColumnWidth(2, 165)
+        self.table.setColumnWidth(3, 68)
+        self.table.setColumnWidth(4, 68)
+        self.table.setColumnWidth(6, 220)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.itemChanged.connect(self._on_item_changed)
+        self.table.cellClicked.connect(self._on_row_clicked)
+        layout.addWidget(self.table, stretch=1)
+
+        # Pie del diálogo
+        footer = QHBoxLayout()
+        self.lbl_count = QLabel("")
+        self.lbl_count.setStyleSheet(f"color:{TEXT_MAIN}; font-weight:bold;")
+        footer.addWidget(self.lbl_count)
+        footer.addStretch()
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_apply = QPushButton("✅ Aplicar secciones seleccionadas")
+        self.btn_apply.setObjectName("btn_primary")
+        self.btn_apply.clicked.connect(self.accept)
+        footer.addWidget(self.btn_cancel)
+        footer.addWidget(self.btn_apply)
+        layout.addLayout(footer)
+
+    def _populate(self):
+        self._populating = True
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(self._sections))
+            for r, sec in enumerate(self._sections):
+                self.table.setRowHeight(r, 30)
+
+                # Col 0: Checkbox
+                chk_item = QTableWidgetItem("")
+                chk_item.setFlags(
+                    Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                )
+                chk_item.setCheckState(
+                    Qt.CheckState.Checked if sec.get("selected", True) else Qt.CheckState.Unchecked
+                )
+                chk_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.table.setItem(r, 0, chk_item)
+
+                # Col 1: #
+                num_item = QTableWidgetItem(str(r + 1))
+                num_item.setFlags(num_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                num_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                num_item.setForeground(QColor(TEXT_MUTED))
+                self.table.setItem(r, 1, num_item)
+
+                # Col 2: Tipo
+                cb_tipo = NoScrollComboBox()
+                cb_tipo.addItems(["Cotización Proveedor", "Presupuesto Global"])
+                cb_tipo.setCurrentText(sec.get("tipo", "Cotización Proveedor"))
+                self.table.setCellWidget(r, 2, cb_tipo)
+
+                # Col 3 & 4: Pág. Ini / Fin
+                sb0 = NoScrollSpinBox()
+                sb0.setRange(1, self._total_pages)
+                sb0.setValue(max(1, min(self._total_pages, int(sec.get("p0", 1)))))
+                self.table.setCellWidget(r, 3, sb0)
+
+                sb1 = NoScrollSpinBox()
+                sb1.setRange(1, self._total_pages)
+                sb1.setValue(max(1, min(self._total_pages, int(sec.get("p1", 1)))))
+                self.table.setCellWidget(r, 4, sb1)
+
+                # Col 5: Rubro
+                lbl_item = QTableWidgetItem(str(sec.get("label", "")))
+                self.table.setItem(r, 5, lbl_item)
+
+                # Col 6: Clasificación / Motivo
+                cat = sec.get("category", "Cotización")
+                reason = sec.get("reason", "")
+                cat_txt = f"{cat} · {reason}" if reason else cat
+                cat_item = QTableWidgetItem(cat_txt)
+                cat_item.setFlags(cat_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                cat_item.setToolTip(reason or cat)
+                if cat == "Cotización":
+                    cat_item.setForeground(QColor(GREEN))
+                elif cat == "Presupuesto Global":
+                    cat_item.setForeground(QColor("#63b3ed"))
+                else:
+                    cat_item.setForeground(QColor("#e6a23c"))
+                self.table.setItem(r, 6, cat_item)
+        finally:
+            self.table.setUpdatesEnabled(True)
+            self._populating = False
+        self._update_counts()
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if self._populating or item is None:
+            return
+        if item.column() == 0:
+            self._update_counts()
+
+    def _on_row_clicked(self, row: int, _col: int):
+        sb0 = self.table.cellWidget(row, 3)
+        if isinstance(sb0, QSpinBox):
+            self.page_preview_requested.emit(sb0.value() - 1)
+
+    def _apply_quick_filter(self, mode: str):
+        self._populating = True
+        try:
+            for r in range(self.table.rowCount()):
+                chk_item = self.table.item(r, 0)
+                if chk_item is None:
+                    continue
+                if mode == "all":
+                    state = True
+                elif mode == "none":
+                    state = False
+                else:
+                    cat = self._sections[r].get("category", "") if r < len(self._sections) else ""
+                    state = cat in ("Presupuesto Global", "Cotización")
+                chk_item.setCheckState(Qt.CheckState.Checked if state else Qt.CheckState.Unchecked)
+        finally:
+            self._populating = False
+        self._update_counts()
+
+    def _update_counts(self):
+        total = self.table.rowCount()
+        checked = sum(
+            1 for r in range(total)
+            if self.table.item(r, 0) and self.table.item(r, 0).checkState() == Qt.CheckState.Checked
+        )
+        deselected = total - checked
+        non_quote = sum(
+            1 for s in self._sections if s.get("category") not in ("Presupuesto Global", "Cotización")
+        )
+        self.lbl_summary.setText(
+            f"Se detectaron {total} secciones · {checked} seleccionadas · "
+            f"{non_quote} anexo(s)/carta(s) o resumen(es) sugerido(s) desmarcado(s) ({deselected} sin marcar)."
+        )
+        self.lbl_count.setText(f"{checked} sección(es) seleccionada(s)")
+        self.btn_apply.setEnabled(checked > 0)
+
+    def get_selected_sections(self) -> list[dict]:
+        selected: list[dict] = []
+        for r in range(self.table.rowCount()):
+            chk = self.table.item(r, 0)
+            if not chk or chk.checkState() != Qt.CheckState.Checked:
+                continue
+            cb_tipo = self.table.cellWidget(r, 2)
+            tipo = cb_tipo.currentText() if isinstance(cb_tipo, QComboBox) else "Cotización Proveedor"
+            sb0 = self.table.cellWidget(r, 3)
+            sb1 = self.table.cellWidget(r, 4)
+            p0 = sb0.value() if isinstance(sb0, QSpinBox) else 1
+            p1 = sb1.value() if isinstance(sb1, QSpinBox) else p0
+            p0 = max(1, min(self._total_pages, p0))
+            p1 = max(1, min(self._total_pages, p1))
+            if p0 > p1:
+                p0, p1 = p1, p0
+            lbl_item = self.table.item(r, 5)
+            label = lbl_item.text().strip() if lbl_item else ""
+            if not label:
+                label = f"Sección p.{p0}-{p1}" if p0 != p1 else f"Sección p.{p0}"
+            selected.append({
+                "label":    label,
+                "tipo":     tipo,
+                "pdf_idx":  0,
+                "p0":       p0,
+                "p1":       p1,
+                "det_iva":  True,
+                "calc_sub": True,
+            })
+        return selected
 
 
 # ─────────────────────────────────────────────────────────────
@@ -406,9 +657,11 @@ class SectionWidget(QWidget):
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.setSpacing(4)
         
-        self.btn_toggle = QPushButton(f"  >   📄 Sección {self._idx + 1}")
+        self.btn_toggle = QPushButton(f"> 📑 {self._idx + 1}")
         self.btn_toggle.setCheckable(True)
         self.btn_toggle.setChecked(False) # Colapsado por defecto
+        self.btn_toggle.setMinimumWidth(0)
+        self.btn_toggle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.btn_toggle.setObjectName("expander_btn")
         self.btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_toggle.clicked.connect(self._toggle)
@@ -428,8 +681,8 @@ class SectionWidget(QWidget):
         self.container.setObjectName("expander_content")
         self.container.setVisible(False)
         clayout = QVBoxLayout(self.container)
-        clayout.setContentsMargins(14, 14, 14, 14)
-        clayout.setSpacing(12)
+        clayout.setContentsMargins(12, 12, 12, 12)
+        clayout.setSpacing(10)
 
         lbl_style = "font-size: 11px; font-weight: bold; color: #A3A8B8;"
 
@@ -437,6 +690,8 @@ class SectionWidget(QWidget):
         lbl_rubro = QLabel("Rubro / Concepto")
         lbl_rubro.setStyleSheet(lbl_style)
         self.le_label = QLineEdit(f"Sección {self._idx + 1}")
+        self.le_label.setMinimumWidth(0)
+        self.le_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         clayout.addWidget(lbl_rubro)
         clayout.addWidget(self.le_label)
 
@@ -444,6 +699,8 @@ class SectionWidget(QWidget):
         lbl_tipo = QLabel("Tipo")
         lbl_tipo.setStyleSheet(lbl_style)
         self.cb_tipo = NoScrollComboBox()
+        self.cb_tipo.setMinimumWidth(0)
+        self.cb_tipo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.cb_tipo.addItems(["Cotización Proveedor", "Presupuesto Global"])
         clayout.addWidget(lbl_tipo)
         clayout.addWidget(self.cb_tipo)
@@ -452,6 +709,9 @@ class SectionWidget(QWidget):
         self.lbl_pdf = QLabel("PDF")
         self.lbl_pdf.setStyleSheet(lbl_style)
         self.cb_pdf = NoScrollComboBox()
+        self.cb_pdf.setMinimumWidth(0)
+        self.cb_pdf.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.cb_pdf.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         if self._pdf_names:
             self.cb_pdf.addItems(self._pdf_names)
         else:
@@ -478,7 +738,12 @@ class SectionWidget(QWidget):
 
         layout.addWidget(self.container)
 
-        # Propagar cambios
+        # Propagar cambios y refrescar encabezado
+        self.le_label.textChanged.connect(self._update_header_text)
+        self.cb_tipo.currentIndexChanged.connect(self._update_header_text)
+        self.sb_p0.valueChanged.connect(self._update_header_text)
+        self.sb_p1.valueChanged.connect(self._update_header_text)
+
         for w in (self.le_label, self.cb_tipo, self.cb_pdf):
             if hasattr(w, "textChanged"):
                 w.textChanged.connect(self.changed)
@@ -487,14 +752,35 @@ class SectionWidget(QWidget):
         for w in (self.sb_p0, self.sb_p1):
             w.valueChanged.connect(self.changed)
         self.cb_pdf.currentIndexChanged.connect(self._on_pdf_changed)
+        self._update_header_text()
+
+    def set_index(self, idx: int):
+        self._idx = idx
+        self._update_header_text()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_header_text()
+
+    def _update_header_text(self):
+        checked = self.btn_toggle.isChecked()
+        arrow = "v" if checked else ">"
+        tipo = self.cb_tipo.currentText()
+        icon = "🌐" if tipo == "Presupuesto Global" else "📑"
+        p0 = self.sb_p0.value()
+        p1 = self.sb_p1.value()
+        p_rng = f"p.{p0}" if p1 == p0 else f"p.{p0}-{p1}"
+        full_lbl = (self.le_label.text() or f"Sección {self._idx + 1}").strip()
+        raw_text = f"{arrow} {icon} {self._idx + 1} · {p_rng} · {full_lbl}"
+        avail_w = max(120, self.btn_toggle.width() - 14) if self.btn_toggle.width() > 40 else 195
+        fm = QFontMetrics(self.btn_toggle.font())
+        elided = fm.elidedText(raw_text, Qt.TextElideMode.ElideRight, avail_w)
+        self.btn_toggle.setText(elided)
+        self.btn_toggle.setToolTip(f"Sección {self._idx + 1} ({p_rng}) · {tipo}\n{full_lbl}")
 
     def _toggle(self, checked):
-        if checked:
-            self.btn_toggle.setText(f"  v   📄 Sección {self._idx + 1}")
-            self.container.setVisible(True)
-        else:
-            self.btn_toggle.setText(f"  >   📄 Sección {self._idx + 1}")
-            self.container.setVisible(False)
+        self.container.setVisible(bool(checked))
+        self._update_header_text()
 
     def _update_max_pages(self):
         pdf_idx = self.cb_pdf.currentIndex() if self._pdf_names else 0
@@ -528,6 +814,7 @@ class SectionWidget(QWidget):
             self.sb_p0.setValue(cfg["p0"])
         if "p1" in cfg:
             self.sb_p1.setValue(cfg["p1"])
+        self._update_header_text()
 
     def update_pdf_names(self, pdf_names: list[str], max_pages: list[int]):
         self._pdf_names = pdf_names
@@ -547,17 +834,20 @@ class SectionWidget(QWidget):
 # PANEL LATERAL DE CONFIGURACIÓN
 # ─────────────────────────────────────────────────────────────
 class ConfigPanel(QWidget):
-    extract_requested = pyqtSignal(list, str)  # (sec_configs, bx_token)
-    pdf_loaded        = pyqtSignal()
+    extract_requested     = pyqtSignal(list, str)  # (sec_configs, bx_token)
+    pdf_loaded            = pyqtSignal()
     token_update_requested = pyqtSignal(str)
-    section_deleted   = pyqtSignal(str)        # Emite el label de la sección eliminada
+    section_deleted       = pyqtSignal(str)        # Emite el label de la sección eliminada
+    auto_detect_requested = pyqtSignal()
+    sections_changed      = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("sidebar")
-        self.setFixedWidth(280)
+        self.setFixedWidth(310)
         self._pdf_files: list[dict]  = []
         self._sec_widgets: list[SectionWidget] = []
+        self._batch_updating = False
         self._build()
 
     def _build(self):
@@ -581,7 +871,7 @@ class ConfigPanel(QWidget):
         _content.setObjectName("sidebar_content")
         _content.setStyleSheet(f"QWidget#sidebar_content {{ background:{BG_SIDEBAR}; }}")
         main = QVBoxLayout(_content)
-        main.setContentsMargins(10, 10, 10, 10)
+        main.setContentsMargins(8, 10, 8, 10)
         main.setSpacing(12)
 
         # ── PDFs ─────────────────────────────────────────────────────
@@ -617,19 +907,28 @@ class ConfigPanel(QWidget):
         self.btn_clear_pdf.clicked.connect(self._clear_pdfs)
         self.btn_clear_pdf.setEnabled(False)
         vl.addWidget(self.btn_clear_pdf)
+
+        self.chk_force_ocr = QCheckBox("Forzar OCR de alta precisión")
+        self.chk_force_ocr.setToolTip(
+            "El OCR avanzado se activa automáticamente en PDFs escaneados\n"
+            "o con OCR incrustado deficiente (ej. iLovePDF).\n"
+            "Marca esta opción para forzar RapidOCR en todas las secciones."
+        )
+        self.chk_force_ocr.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        vl.addWidget(self.chk_force_ocr)
         main.addWidget(grp_pdf)
 
         # ── Proyecto ──────────────────────────────────────────
         grp_proy = QGroupBox("Proyecto")
         fl = QFormLayout(grp_proy)
         self.le_proyecto = QLineEdit()
+        self.le_proyecto.setMinimumWidth(0)
         self.le_proyecto.setPlaceholderText("Nombre del proyecto…")
         fl.addRow("Nombre:", self.le_proyecto)
 
         # Fecha de solicitud (para validar vigencia de cotizaciones)
-        from PyQt6.QtWidgets import QDateEdit
-        from PyQt6.QtCore import QDate
         self.de_fecha_solicitud = QDateEdit()
+        self.de_fecha_solicitud.setMinimumWidth(110)
         self.de_fecha_solicitud.setCalendarPopup(True)
         self.de_fecha_solicitud.setDate(QDate.currentDate())
         self.de_fecha_solicitud.setDisplayFormat("dd/MM/yyyy")
@@ -641,7 +940,6 @@ class ConfigPanel(QWidget):
         fl.addRow("Fecha solicitud:", self.de_fecha_solicitud)
 
         # PII exclusivamente de equipo
-        from PyQt6.QtWidgets import QCheckBox
         self.chk_pii_equipo = QCheckBox("PII solo compra de equipo")
         self.chk_pii_equipo.setToolTip(
             "Marcar si el PII es exclusivamente de\n"
@@ -658,6 +956,7 @@ class ConfigPanel(QWidget):
         grp_bx = QGroupBox("Banxico – Tipo de Cambio")
         fl2 = QFormLayout(grp_bx)
         self.le_token = QLineEdit()
+        self.le_token.setMinimumWidth(0)
         self.le_token.setPlaceholderText("Pega tu token aquí.")
         self.le_token.setEchoMode(QLineEdit.EchoMode.Password)
         
@@ -695,11 +994,17 @@ class ConfigPanel(QWidget):
         vl_sec.addWidget(lbl_nsec)
 
         self.sb_nsec = NoScrollSpinBox()
-        self.sb_nsec.setRange(1, 50)
+        self.sb_nsec.setRange(1, 500)
         self.sb_nsec.setValue(1)
         self.sb_nsec.setMinimumWidth(64)
         self.sb_nsec.valueChanged.connect(self._rebuild_sections)
         vl_sec.addWidget(self.sb_nsec)
+
+        self.btn_auto_sec = QPushButton("✨  Auto-detectar secciones")
+        self.btn_auto_sec.setEnabled(False)
+        self.btn_auto_sec.setToolTip("Carga 1 archivo PDF para auto-detectar secciones.")
+        self.btn_auto_sec.clicked.connect(self.auto_detect_requested.emit)
+        vl_sec.addWidget(self.btn_auto_sec)
 
         # Sin scroll anidado — el panel completo ya scrollea verticalmente
         self._sec_container = QWidget()
@@ -727,6 +1032,10 @@ class ConfigPanel(QWidget):
     def _pdf_names(self)  -> list[str]:  return [f["name"] for f in self._pdf_files]
     def _max_pages(self) -> list[int]:   return [f["pages"] for f in self._pdf_files]
 
+    def _emit_sections_changed(self):
+        if not self._batch_updating:
+            self.sections_changed.emit([sw.get_config() for sw in self._sec_widgets])
+
     def _rebuild_sections(self, n: int):
         current_n = len(self._sec_widgets)
         if n == current_n:
@@ -740,6 +1049,7 @@ class ConfigPanel(QWidget):
             for i in range(current_n, n):
                 sw = SectionWidget(i, names, pages)
                 sw.delete_requested.connect(self._remove_section)
+                sw.changed.connect(self._emit_sections_changed)
                 self._sec_layout.insertWidget(i, sw)
                 self._sec_widgets.append(sw)
         else:
@@ -748,6 +1058,7 @@ class ConfigPanel(QWidget):
                 w = self._sec_widgets.pop()
                 self._sec_layout.removeWidget(w)
                 w.deleteLater()
+        self._emit_sections_changed()
 
     def _remove_section(self, sw: SectionWidget):
         label = sw.le_label.text().strip()
@@ -755,6 +1066,9 @@ class ConfigPanel(QWidget):
             self._sec_widgets.remove(sw)
             self._sec_layout.removeWidget(sw)
             sw.deleteLater()
+
+            for i, rem_sw in enumerate(self._sec_widgets):
+                rem_sw.set_index(i)
             
             # Ajustar el spinbox sin disparar _rebuild_sections
             self.sb_nsec.blockSignals(True)
@@ -762,6 +1076,7 @@ class ConfigPanel(QWidget):
             self.sb_nsec.blockSignals(False)
             
             self.section_deleted.emit(label)
+            self._emit_sections_changed()
 
     def _open_pdfs(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -800,6 +1115,8 @@ class ConfigPanel(QWidget):
             self.lst_pdf_files.setVisible(False)
             self.btn_clear_pdf.setEnabled(False)
             self.btn_extract.setEnabled(False)
+            self.btn_auto_sec.setEnabled(False)
+            self.btn_auto_sec.setToolTip("Carga 1 archivo PDF para auto-detectar secciones.")
         else:
             total = sum(f["pages"] for f in self._pdf_files)
             self.lbl_pdf_info.setText(
@@ -811,36 +1128,78 @@ class ConfigPanel(QWidget):
             self.lst_pdf_files.setVisible(True)
             self.btn_clear_pdf.setEnabled(True)
             self.btn_extract.setEnabled(True)
+            if n == 1:
+                self.btn_auto_sec.setEnabled(True)
+                self.btn_auto_sec.setToolTip(
+                    "Analiza este PDF único para detectar automáticamente\n"
+                    "el Presupuesto Global, cada cotización y omitir cartas/anexos."
+                )
+            else:
+                self.btn_auto_sec.setEnabled(False)
+                self.btn_auto_sec.setToolTip(
+                    "Disponible cuando se carga 1 solo PDF.\n"
+                    "Con múltiples PDFs cada archivo ya se asigna 1 a 1."
+                )
         # Actualizar secciones
         names = self._pdf_names()
         pages = self._max_pages()
         
-        if n > 0:
-            self.sb_nsec.setValue(n)
-            for i, sw in enumerate(self._sec_widgets):
-                sw.update_pdf_names(names, pages)
-                if i < n:
-                    # Mapear 1 a 1
-                    sw.cb_pdf.setCurrentIndex(i)
-                    
-                    # Auto-completar Rubro
-                    fname = names[i]
-                    fname_clean = fname[:-4] if fname.lower().endswith('.pdf') else fname
-                    sw.le_label.setText(fname_clean)
-                    
-                    # Inferir Tipo
-                    if "PRESUPUESTO" in fname.upper():
-                        sw.cb_tipo.setCurrentText("Presupuesto Global")
-                    else:
-                        sw.cb_tipo.setCurrentText("Cotización Proveedor")
+        self._batch_updating = True
+        try:
+            if n > 0:
+                if n > self.sb_nsec.maximum():
+                    self.sb_nsec.setMaximum(n)
+                self.sb_nsec.setValue(n)
+                for i, sw in enumerate(self._sec_widgets):
+                    sw.set_index(i)
+                    sw.update_pdf_names(names, pages)
+                    if i < n:
+                        # Mapear 1 a 1
+                        sw.cb_pdf.setCurrentIndex(i)
                         
-                    # Auto-completar páginas
-                    sw.sb_p0.setValue(1)
-                    sw.sb_p1.setValue(pages[i])
-        else:
-            self.sb_nsec.setValue(1)
-            for sw in self._sec_widgets:
+                        # Auto-completar Rubro
+                        fname = names[i]
+                        fname_clean = fname[:-4] if fname.lower().endswith('.pdf') else fname
+                        sw.le_label.setText(fname_clean)
+                        
+                        # Inferir Tipo
+                        if "PRESUPUESTO" in fname.upper():
+                            sw.cb_tipo.setCurrentText("Presupuesto Global")
+                        else:
+                            sw.cb_tipo.setCurrentText("Cotización Proveedor")
+                            
+                        # Auto-completar páginas
+                        sw.sb_p0.setValue(1)
+                        sw.sb_p1.setValue(pages[i])
+            else:
+                self.sb_nsec.setValue(1)
+                for i, sw in enumerate(self._sec_widgets):
+                    sw.set_index(i)
+                    sw.update_pdf_names(names, pages)
+        finally:
+            self._batch_updating = False
+        self._emit_sections_changed()
+
+    def apply_detected_sections(self, sections: list[dict]):
+        if not sections:
+            return
+        names = self._pdf_names()
+        pages = self._max_pages()
+        self._batch_updating = True
+        self._sec_container.setUpdatesEnabled(False)
+        try:
+            if len(sections) > self.sb_nsec.maximum():
+                self.sb_nsec.setMaximum(len(sections))
+            self.sb_nsec.setValue(len(sections))
+            for i, sw in enumerate(self._sec_widgets):
+                sw.set_index(i)
                 sw.update_pdf_names(names, pages)
+                if i < len(sections):
+                    sw.set_config(sections[i])
+        finally:
+            self._sec_container.setUpdatesEnabled(True)
+            self._batch_updating = False
+        self._emit_sections_changed()
 
     def _on_extract(self):
         cfgs = [sw.get_config() for sw in self._sec_widgets]
@@ -863,6 +1222,7 @@ class ConfigPanel(QWidget):
             "token": self.le_token.text(),
             "fecha_solicitud": self.de_fecha_solicitud.date().toString("yyyy-MM-dd"),
             "pii_solo_equipo": self.chk_pii_equipo.isChecked(),
+            "force_ocr": self.chk_force_ocr.isChecked(),
             "pdf_files": pdfs,
             "secciones": [sw.get_config() for sw in self._sec_widgets]
         }
@@ -874,12 +1234,13 @@ class ConfigPanel(QWidget):
         if "token" in state:
             self.le_token.setText(state["token"])
         if "fecha_solicitud" in state:
-            from PyQt6.QtCore import QDate
             d = QDate.fromString(state["fecha_solicitud"], "yyyy-MM-dd")
             if d.isValid():
                 self.de_fecha_solicitud.setDate(d)
         if "pii_solo_equipo" in state:
             self.chk_pii_equipo.setChecked(state["pii_solo_equipo"])
+        if "force_ocr" in state:
+            self.chk_force_ocr.setChecked(bool(state["force_ocr"]))
         
         # Cargar PDFs PRIMERO para que los spinboxes tengan los límites correctos
         if "pdf_files" in state:
@@ -894,10 +1255,20 @@ class ConfigPanel(QWidget):
             self.pdf_loaded.emit()
 
         secciones = state.get("secciones", [])
-        self.sb_nsec.setValue(len(secciones))
-        for i, cfg in enumerate(secciones):
-            if i < len(self._sec_widgets):
-                self._sec_widgets[i].set_config(cfg)
+        self._batch_updating = True
+        self._sec_container.setUpdatesEnabled(False)
+        try:
+            if len(secciones) > self.sb_nsec.maximum():
+                self.sb_nsec.setMaximum(len(secciones))
+            self.sb_nsec.setValue(max(1, len(secciones)) if secciones else 0)
+            for i, cfg in enumerate(secciones):
+                if i < len(self._sec_widgets):
+                    self._sec_widgets[i].set_index(i)
+                    self._sec_widgets[i].set_config(cfg)
+        finally:
+            self._sec_container.setUpdatesEnabled(True)
+            self._batch_updating = False
+        self._emit_sections_changed()
 
     def get_pdf_files(self) -> list[dict]:
         return self._pdf_files
@@ -1696,6 +2067,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Conciliador de Cotizaciones v6.6")
         self.resize(1400, 860)
         self._extract_worker: ExtractWorker | None = None
+        self._auto_sec_worker: AutoSectionWorker | None = None
         self._pdf_combined_bytes: bytes = b""
         self._pdf_files: list[dict]     = []
         self._sec_cfgs:  list[dict]     = []
@@ -1739,6 +2111,8 @@ class MainWindow(QMainWindow):
         self.config_panel = ConfigPanel()
         self.config_panel.extract_requested.connect(self._start_extract)
         self.config_panel.pdf_loaded.connect(self._on_pdf_loaded)
+        self.config_panel.auto_detect_requested.connect(self._start_auto_detect)
+        self.config_panel.sections_changed.connect(self._on_sections_changed)
         
         # Área derecha (Banner + Splitter)
         right_widget = QWidget()
@@ -1801,7 +2175,7 @@ class MainWindow(QMainWindow):
         
         self.main_splitter.addWidget(self.config_panel)
         self.main_splitter.addWidget(right_widget)
-        self.main_splitter.setSizes([280, 800])
+        self.main_splitter.setSizes([310, 800])
         h_main.addWidget(self.main_splitter)
 
     # ── Carga de PDF ──────────────────────────────────────────
@@ -1835,6 +2209,87 @@ class MainWindow(QMainWindow):
                 return
         self.pdf_viewer.set_section_label("")
 
+    def _on_sections_changed(self, cfgs: list):
+        self._sec_cfgs = cfgs
+        self._on_page_changed(self.pdf_viewer.current_page())
+
+    # ── Auto-detección de secciones (PDF único) ───────────────
+    def _set_busy_pdf_controls(self, busy: bool):
+        has_files = bool(self.config_panel.get_pdf_files())
+        is_single = len(self.config_panel.get_pdf_files()) == 1
+        self.config_panel.btn_add_pdf.setEnabled(not busy)
+        self.config_panel.btn_clear_pdf.setEnabled((not busy) and has_files)
+        self.config_panel.btn_extract.setEnabled((not busy) and has_files)
+        self.config_panel.btn_auto_sec.setEnabled((not busy) and is_single)
+
+    def _start_auto_detect(self):
+        files = self.config_panel.get_pdf_files()
+        if len(files) != 1:
+            QMessageBox.information(
+                self,
+                "Auto-detección de secciones",
+                "Carga exactamente un archivo PDF para auto-detectar sus secciones.",
+            )
+            return
+        self._set_busy_pdf_controls(True)
+        total_p = max(1, int(files[0].get("pages", 1)))
+        self.progress_bar.setRange(0, total_p)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.status.showMessage("Analizando estructura del PDF…")
+
+        self._auto_sec_worker = AutoSectionWorker(files[0]["bytes"], files[0]["name"])
+        self._auto_sec_worker.progress.connect(self._on_auto_detect_progress)
+        self._auto_sec_worker.finished.connect(self._on_auto_detect_finished)
+        self._auto_sec_worker.errored.connect(self._on_auto_detect_error)
+        self._auto_sec_worker.start()
+
+    def _on_auto_detect_progress(self, current: int, total: int, message: str):
+        self.progress_bar.setMaximum(max(1, total))
+        self.progress_bar.setValue(min(current, max(1, total)))
+        self.status.showMessage(message)
+
+    def _on_auto_detect_finished(self, sections: list):
+        self.progress_bar.setVisible(False)
+        self._set_busy_pdf_controls(False)
+        if not sections:
+            self.status.showMessage("No se detectaron secciones automáticamente.", 4000)
+            QMessageBox.information(
+                self,
+                "Auto-detección de secciones",
+                "No se pudieron identificar secciones automáticamente en este PDF.",
+            )
+            return
+        files = self.config_panel.get_pdf_files()
+        if not files:
+            return
+        fname = files[0]["name"]
+        total_pages = files[0]["pages"]
+        dlg = AutoSectionsDialog(sections, fname, total_pages, parent=self)
+        dlg.page_preview_requested.connect(self.pdf_viewer._go_to)
+        self.status.showMessage(f"Se detectaron {len(sections)} sección(es) · En revisión…")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected = dlg.get_selected_sections()
+            if selected:
+                self.config_panel.apply_detected_sections(selected)
+                self.status.showMessage(
+                    f"✨ {len(selected)} sección(es) aplicada(s) · Revisa o presiona 🔍 Extraer Montos"
+                )
+            else:
+                self.status.showMessage("No se aplicó ninguna sección.", 4000)
+        else:
+            self.status.showMessage("Auto-detección cancelada.", 4000)
+
+    def _on_auto_detect_error(self, err: str):
+        self.progress_bar.setVisible(False)
+        self._set_busy_pdf_controls(False)
+        self.status.showMessage("Error en auto-detección.", 4000)
+        QMessageBox.critical(
+            self,
+            "Error en auto-detección",
+            f"No se pudo analizar el PDF:\n{err}",
+        )
+
     # ── Extracción ────────────────────────────────────────────
     def _start_extract(self, cfgs: list, bx_token: str):
         if not self._pdf_files:
@@ -1848,7 +2303,10 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Extrayendo montos…")
 
         self._extract_worker = ExtractWorker(
-            self._pdf_files, cfgs, bx_token
+            self._pdf_files,
+            cfgs,
+            bx_token,
+            force_ocr=self.config_panel.chk_force_ocr.isChecked(),
         )
         self._extract_worker.progress.connect(self._on_extract_progress)
         self._extract_worker.warning.connect(self.data_panel.add_warning)
