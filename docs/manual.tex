@@ -14,7 +14,7 @@
 \usepackage[
   top=2.5cm, bottom=2.5cm,
   left=3cm,  right=2.5cm,
-  headheight=15pt
+  headheight=25pt
 ]{geometry}
 
 % ── Fuentes ───────────────────────────────────────────────
@@ -103,8 +103,8 @@
 \usepackage{fancyhdr}
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\color{vino}\small\textbf{Conciliador de Cotizaciones v6.6}}
-\fancyhead[R]{\color{gray}\small\leftmark}
+\fancyhead[L]{\color{vino}\footnotesize\textbf{Conciliador de Cotizaciones v6.6}}
+\fancyhead[R]{\color{gray}\footnotesize\leftmark}
 \fancyfoot[C]{\color{gray}\small\thepage}
 \renewcommand{\headrulewidth}{0.4pt}
 \renewcommand{\headrule}{\hbox to\headwidth{\color{vino}\leaders\hrule height\headrulewidth\hfill}}
@@ -172,8 +172,8 @@
   {\color{vinoLite}\large Versión 6.6}\\[40pt]
   {\color{vino!70!black}\normalsize
     Motor de extracción PDF nativo\\
-    5 estrategias de análisis · OCR · API Banxico\\[20pt]
-    Guardado de proyectos · Interfaz nativa Windows (PyQt6)
+    5 estrategias de análisis · OCR multinivel · Auto-detección de secciones · API Banxico\\[20pt]
+    Validación normativa EFIDEPORTE · Guardado de proyectos · Ejecutable Windows (PyQt6)
   }\\[50pt]
   {\color{borderCol}\small SHCP - UPIT · \today}
 \end{titlepage}
@@ -214,18 +214,29 @@ documentos PDF con los montos registrados en el Anexo Escrito del proyecto.
         desglosado o exento; descompone el impuesto al 16\%.
   \item \textbf{Conversión de divisas:} Consulta la API del Banco de México (Banxico)
         para obtener el tipo de cambio vigente de USD, EUR y CAD.
-  \item \textbf{Multidocumento:} Procesa múltiples PDFs en paralelo, asignando cada
+  \item \textbf{OCR avanzado de doble pasada:} Detecta automáticamente escaneos y capas
+        OCR incrustadas deficientes (p.\ ej.\ iLovePDF), aplica preprocesamiento
+        adaptativo (inversión de fondos oscuros y limpieza de resaltadores) y escala de
+        PyTesseract a RapidOCR; incluye la opción manual \textit{Forzar OCR de alta precisión}.
+  \item \textbf{Auto-detección de secciones (PDF único):} Identifica automáticamente el
+        \textit{Presupuesto Global} y cada cotización en expedientes consolidados en un
+        solo PDF (por marcadores o análisis visual/OCR), mostrando un diálogo interactivo
+        para marcar/desmarcar y ajustar secciones antes de extraer.
+  \item \textbf{Multidocumento:} Procesa múltiples PDFs en un único flujo, asignando cada
         sección a un archivo y rango de páginas diferente.
-  \item \textbf{Exportación a Excel:} Genera un reporte \texttt{.xlsx} con formato
-        profesional, fórmulas de validación y estilo corporativo.
+  \item \textbf{Exportación a Excel:} Genera un reporte \texttt{.xlsx} en disposición
+        \textbf{Carta horizontal} con formato profesional, fórmulas de validación y
+        estilo corporativo.
   \item \textbf{Guardado y carga de proyectos:} Guarda el estado completo del
-        proyecto (PDFs, secciones, tabla y token) en un archivo \texttt{.cshcp}
-        portable entre equipos.
+        proyecto (PDFs, secciones, parámetros normativos, OCR, tabla y token) en un
+        archivo \texttt{.cshcp} portable entre equipos.
   \item \textbf{Botón de guardado rápido:} Acceso directo en la barra superior
         para guardar sin navegar menús.
   \item \textbf{Actualización de token en caliente:} Cambia el token de Banxico
         sin perder las ediciones manuales ya realizadas en la tabla.
-  \item \textbf{Interfaz nativa:} Aplicación \texttt{.exe} autónoma para Windows.
+  \item \textbf{Interfaz nativa:} Aplicación \texttt{.exe} autónoma de archivo único
+        para Windows, con panel lateral fijo (\texttt{310 px}) sin desbordamiento
+        horizontal y encabezados dinámicos adaptativos.
 \end{itemize}
 
 \section{Público objetivo}
@@ -258,37 +269,29 @@ contenidos en los anexos escritos de los proyectos deportivos.
 
 \section{Instalación}
 
-La aplicación se distribuye como una carpeta autocontenida generada con
-PyInstaller. \textbf{No requiere instalación} — basta con copiar la carpeta y
-ejecutar el archivo:
+La aplicación se distribuye como un \textbf{ejecutable único portable}
+(\textit{onefile}) generado con PyInstaller, que ya incluye en su interior todas las
+bibliotecas (PyQt6, RapidOCR, Tesseract OCR con idiomas español/inglés y dependencias de
+datos). \textbf{No requiere instalación} ni carpetas externas adicionales — basta con
+copiar y ejecutar el archivo:
 
 \begin{rutabox}
-dist\textbackslash{}Conciliador\textbackslash{}Conciliador.exe
+dist\textbackslash{}Conciliador.exe
 \end{rutabox}
 
 \begin{notabox}
 En el primer arranque, Windows Defender SmartScreen puede mostrar el mensaje
 ``Windows protegió tu equipo''. Haz clic en \textbf{Más información} y luego en
-\textbf{Ejecutar de todas formas}. Esto solo ocurre la primera vez.
+\textbf{Ejecutar de todas formas}. Al tratarse de un ejecutable único comprimido, el
+primer inicio puede tardar unos segundos mientras Windows extrae temporalmente el
+entorno de ejecución.
 \end{notabox}
 
-\subsection{Estructura de la carpeta}
-
-\begin{rutabox}
-dist\textbackslash{}Conciliador\textbackslash{}\\
-\hspace{1em}Conciliador.exe          \textcolor{textMuted}{← ejecutable principal}\\
-\hspace{1em}\_internal\textbackslash{}             \textcolor{textMuted}{← dependencias (no modificar)}\\
-\hspace{2em}PyQt6\textbackslash{}\\
-\hspace{2em}fitz\textbackslash{}\\
-\hspace{2em}pandas\textbackslash{}\\
-\hspace{2em}...
-\end{rutabox}
-
-\begin{warningbox}
-No muevas ni elimines la carpeta \texttt{\_internal}. El ejecutable depende de
-los archivos que contiene. Mueve siempre la carpeta \texttt{Conciliador}
-completa, nunca solo el \texttt{.exe}.
-\end{warningbox}
+\begin{consejobox}
+Puedes colocar \texttt{Conciliador.exe} directamente en el Escritorio o en una unidad
+USB; no depende de la carpeta \texttt{\_internal} ni requiere instalar Tesseract por
+separado en el equipo destino.
+\end{consejobox}
 
 % =============================================================
 \chapter{Descripción de la Interfaz}
@@ -327,27 +330,44 @@ La barra superior contiene dos botones de acceso rápido siempre visibles:
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.32\linewidth]{images/02b_sidebar_zoom.png}
-  \caption{Panel lateral con 6 PDFs cargados y 6 secciones configuradas.}
+  \includegraphics[width=0.34\linewidth]{images/02b_sidebar_zoom.png}
+  \caption{Panel lateral con un expediente único cargado, botón de auto-detección activo, control de OCR de alta precisión y secciones detectadas.}
   \label{fig:sidebar}
 \end{figure}
 
-El panel lateral contiene cuatro grupos colapsables:
+El panel lateral tiene un \textbf{ancho fijo de 310 px} con desplazamiento
+exclusivamente vertical (sin barra de scroll horizontal ni controles recortados) y
+contiene cuatro grupos colapsables:
 
 \subsection{Documentos PDF}
 
 \begin{itemize}
   \item \btn{Agregar PDF(s)}: abre el selector de archivos para cargar uno o
         varios PDFs simultáneamente.
-  \item \textbf{Lista de archivos}: muestra los archivos cargados con su nombre.
-        Si hay más de 3, se puede desplazar con la barra de scroll.
+  \item \textbf{Lista de archivos}: muestra los archivos cargados con su nombre y
+        total de páginas. Si hay más de 3, se puede desplazar con la barra de scroll.
   \item \btn{Limpiar PDFs}: descarga todos los archivos cargados.
+  \item \textbf{Forzar OCR de alta precisión}: casilla opcional para exigir que el
+        motor utilice reconocimiento óptico de alta precisión (RapidOCR + preprocesamiento
+        adaptativo) en todas las secciones. Por defecto viene desmarcada porque el motor
+        activa el escalado avanzado automáticamente cuando detecta escaneos o texto OCR
+        incrustado deficiente (como en archivos generados con iLovePDF). Actívala en
+        cotizaciones difíciles, tipografías pequeñas o documentos con fondos oscuros.
 \end{itemize}
 
 \subsection{Proyecto}
 
-Escribe el nombre del proyecto (p. ej. ``EFIDEPORTE 2026''). Este nombre aparece
-en los encabezados del reporte Excel exportado.
+Agrupa los metadatos generales y parámetros normativos del expediente:
+
+\begin{itemize}
+  \item \campo{Nombre}: título del proyecto (p. ej. ``Pista Virgilio Uribe'').
+        Este nombre aparece en los encabezados del reporte Excel exportado.
+  \item \campo{Fecha solicitud}: fecha de ingreso del proyecto (\texttt{dd/mm/aaaa}),
+        empleada para validar la vigencia máxima de 90 días en cada cotización.
+  \item \textbf{PII solo compra de equipo}: casilla normativa que alerta de inmediato
+        si se detectan gastos administrativos en proyectos exclusivos de adquisición de
+        equipamiento deportivo (ver \hyperref[ch:normativa]{Capítulo~\ref{ch:normativa}}).
+\end{itemize}
 
 \subsection{Banxico — Tipo de Cambio}
 
@@ -369,12 +389,24 @@ volver a presionar \btn{Extraer Montos}. Así conservas tus correcciones.
 \subsection{Secciones (Cotizaciones)}
 
 Cada \textbf{sección} corresponde a una cotización o presupuesto que se va a
-analizar. Puedes agregar hasta 50 secciones. Para eliminar una sección, haz clic en el botón con ícono de basurero situado junto a su nombre; esto la borrará tanto del panel como de la tabla de resultados automáticamente.
+analizar. El selector soporta hasta \textbf{500 secciones} de forma manual (y se
+expande automáticamente si la auto-detección encuentra más en un expediente
+extenso). Cuando se carga un único archivo PDF se habilita el botón
+\btn{Auto-detectar secciones} para segmentarlo automáticamente.
+
+Cada tarjeta colapsada muestra un encabezado dinámico con su ícono de tipo
+(Presupuesto Global o Cotización), número correlativo, rango de páginas
+(\texttt{p.X-Y}) y un resumen del nombre del rubro ajustado automáticamente por
+píxeles con puntos suspensivos (\texttt{...}) para no desbordar el ancho fijo de
+\texttt{310 px} y mantener siempre visible el botón de basurero (el nombre completo
+se consulta al pasar el cursor sobre la tarjeta). Para eliminar una sección, haz clic
+en ese botón junto a su encabezado; la numeración restante se reajusta
+automáticamente y su fila se elimina de la tabla de resultados.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.45\linewidth]{images/05_seccion_widget.png}
-  \caption{Widget de una sección con todos sus campos.}
+  \includegraphics[width=0.38\linewidth]{images/05_seccion_widget.png}
+  \caption{Tarjeta de sección expandida con encabezado dinámico (número, rango de páginas y rubro).}
   \label{fig:seccion_widget}
 \end{figure}
 
@@ -384,10 +416,10 @@ analizar. Puedes agregar hasta 50 secciones. Para eliminar una sección, haz cli
     \toprule
     \textbf{Campo} & \textbf{Descripción} \\
     \midrule
-    Rubro & Nombre descriptivo de la cotización (aparece en el reporte). \\
-    Tipo  & \textit{Cotización Proveedor} o \textit{Presupuesto Global}.\\
-    PDF   & Archivo PDF que contiene esta cotización (visible si hay $>$1 PDF). \\
-    Págs. & Rango de páginas a analizar (``De'' y ``A''). \\
+    Rubro / Concepto & Nombre descriptivo de la cotización (aparece en el reporte). \\
+    Tipo             & \textit{Cotización Proveedor} o \textit{Presupuesto Global}.\\
+    PDF              & Archivo PDF que contiene esta cotización (visible si hay $>$1 PDF). \\
+    Pág. Inicio / Fin & Rango de páginas donde aparece la cotización o presupuesto. \\
     \bottomrule
   \end{tabularx}
   \caption{Campos de configuración de una sección.}
@@ -417,7 +449,7 @@ motor de análisis, no por lo que se ve en pantalla.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/03b_datos_zoom.png}
-  \caption{Panel de datos con KPIs y tabla de resultados después de la extracción.}
+  \caption{Panel de datos con KPIs, avisos de extracción o validación normativa y tabla de resultados editable.}
   \label{fig:datos}
 \end{figure}
 
@@ -477,7 +509,7 @@ directamente — haz doble clic en cualquier celda para modificarla.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/02_sidebar_configurado.png}
-  \caption{Aplicación con PDFs cargados y secciones configuradas, lista para extraer.}
+  \caption{Aplicación con expediente PDF cargado, visor central activo y secciones configuradas en el panel lateral fijo de 310 px.}
   \label{fig:configurado}
 \end{figure}
 
@@ -516,31 +548,98 @@ del reporte Excel.
 
 \section{Paso 3 — Configurar las secciones}
 
+Si cargaste \textbf{múltiples archivos PDF}, el sistema crea automáticamente una
+sección por cada archivo e infiere su tipo (\textit{Presupuesto Global} o
+\textit{Cotización Proveedor}) a partir del nombre del documento. Si cargaste un
+\textbf{solo archivo PDF consolidado}, utiliza primero el botón
+\btn{Auto-detectar secciones} o ajusta manualmente los rangos:
+
 \begin{pasobox}{3}
 \begin{enumerate}
-  \item Ajusta el contador \campo{Núm. de secciones} al número de cotizaciones
-        o presupuestos que deseas procesar.
+  \item Ajusta el contador \campo{Número de secciones} (hasta 500) al número de
+        cotizaciones o presupuestos que deseas procesar, o presiona
+        \btn{Auto-detectar secciones} si cargaste un expediente en un solo PDF.
   \item Para cada sección:
     \begin{itemize}
-      \item Escribe un \campo{Rubro} descriptivo (ej. ``Caballerizas'').
-      \item Selecciona el \campo{Tipo} adecuado.
+      \item Escribe un \campo{Rubro / Concepto} descriptivo (ej. ``Caballerizas'').
+      \item Selecciona el \campo{Tipo} adecuado (\textit{Cotización Proveedor} o
+            \textit{Presupuesto Global}).
       \item Si cargaste varios PDFs, elige el archivo correspondiente en el
             combo \campo{PDF}.
-      \item Establece el rango de páginas (\campo{De} / \campo{A}) donde
-            aparece el total de esa cotización.
-      \item Selecciona la \campo{Moneda} si no es MXN.
-      \item Deja marcado \campo{Detectar IVA} para que el motor determine
-            automáticamente si el IVA está incluido o desglosado.
+      \item Establece el rango de páginas (\campo{Pág. Inicio} / \campo{Pág. Fin})
+            donde aparece esa cotización o presupuesto.
     \end{itemize}
 \end{enumerate}
 \end{pasobox}
 
 \begin{notabox}
-\textbf{¿Cómo sé qué páginas usar?} Navega por el visor PDF con los botones
-< / > y revisa dónde aparece el total o tabla de precios de cada cotización.
-Anota el número de página (mostrado como ``Página X / Y'') y escríbelo en el
-rango correspondiente.
+La moneda (\texttt{MXN}, \texttt{USD}, \texttt{EUR}, \texttt{CAD}) y el estado del
+IVA (\textit{Sí}, \textit{Incluido}, \textit{Exento} o \textit{N/M}) ya \textbf{no}
+requieren capturarse por tarjeta: el motor los detecta automáticamente a partir del
+texto del documento y siempre puedes ajustarlos en la tabla de resultados. Para saber
+qué páginas usar manualmente, navega con \textbf{< / >} en el visor central guiándote
+por el indicador ``Página X / Y''.
 \end{notabox}
+
+\subsection{Auto-detección de secciones (expedientes en un solo PDF)}
+\label{sec:auto_detectar}
+
+Cuando un proyecto completo llega reunido en un \textbf{único PDF} (por ejemplo,
+con el Presupuesto Desglosado, decenas de cotizaciones de proveedores y cartas de
+anexos normativos), configurar las secciones a mano sería tardado. Para automatizar
+este paso:
+
+\begin{enumerate}
+  \item Carga el archivo único con \btn{Agregar PDF(s)}. Al haber exactamente un
+        PDF cargado, se habilitará el botón \btn{Auto-detectar secciones} debajo de
+        \campo{Número de secciones}.
+  \item Haz clic en \btn{Auto-detectar secciones}. El motor analizará marcadores PDF,
+        encabezados, títulos desbordados, cambios de proveedor, cambios de tamaño de
+        página y ejecutará un OCR ligero en segundo plano únicamente en páginas sin
+        capa de texto.
+  \item Al terminar el análisis se abrirá la ventana \textbf{Secciones detectadas}
+        para que revises, marques o desmarques cada bloque antes de aplicarlo.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{images/09_auto_detectar_dialogo.png}
+  \caption{Diálogo de revisión previa de secciones detectadas automáticamente sobre un expediente en PDF único.}
+  \label{fig:auto_detectar}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \begin{tabularx}{\linewidth}{lX}
+    \toprule
+    \textbf{Columna / Control} & \textbf{Función en el diálogo de revisión} \\
+    \midrule
+    Usar                  & Casilla para incluir o excluir la sección en el panel lateral. \\
+    \#                    & Índice correlativo del bloque detectado. \\
+    Tipo                  & Lista desplegable editable: \textit{Cotización Proveedor} o \textit{Presupuesto Global}. \\
+    Pág. Ini / Pág. Fin   & Selectores editables para corregir el rango de páginas antes de aplicar. \\
+    Rubro / Concepto      & Celda de texto editable con el nombre sugerido del rubro o proveedor. \\
+    Clasificación / Motivo & Código de color que explica la detección: \textcolor{SteelBlue}{\textbf{azul}} para Presupuesto Global, \textcolor{greenOk}{\textbf{verde}} para Cotización y \textcolor{orange!85!black}{\textbf{ámbar}} para Resumen financiero o Anexos / Cartas sin cotización. \\
+    Botones rápidos       & \btn{Seleccionar todo}, \btn{Deseleccionar todo} y \btn{Solo presupuesto y cotizaciones}. \\
+    Previsualización en vivo & Al hacer clic en cualquier fila, el visor PDF lateral salta automáticamente a su página de inicio para verificar visualmente el corte. \\
+    \bottomrule
+  \end{tabularx}
+  \caption{Controles y columnas del diálogo de auto-detección.}
+\end{table}
+
+\begin{consejobox}
+\textbf{¿Por qué algunos documentos aparecen desmarcados por defecto?} Los expedientes
+EFIDEPORTE suelen incluir un \textit{Resumen financiero}, cartas manifiesto
+(\textit{Anexo 29} y cartas \textit{34--40} como Gastos Administrativos, Propuesta de
+Personal, Mantenimiento o Rubros no permitidos), oficios municipales, constancias de
+obra y croquis. Para evitar que esos documentos sin cotización dupliquen montos o
+generen falsas alertas en la tabla, el sistema los detecta y los sugiere
+\textbf{desmarcados}, aunque puedes volver a marcar cualquier fila si lo necesitas.
+\end{consejobox}
+
+Al confirmar con \btn{Aplicar secciones seleccionadas}, todas las filas marcadas se
+crean de inmediato como tarjetas configuradas en el panel lateral con sus encabezados
+dinámicos listos para presionar \btn{Extraer Montos}.
 
 \section{Paso 4 — Token Banxico (opcional)}
 \label{sec:banxico}
@@ -581,7 +680,7 @@ del panel lateral.
 \begin{figure}[H]
   \centering
   \includegraphics[width=\linewidth]{images/03_tabla_resultados.png}
-  \caption{Vista completa después de la extracción: visor PDF + tabla con resultados.}
+  \caption{Vista completa después de la extracción: panel lateral v6.6, visor PDF sincronizado, KPIs, avisos y tabla con resultados.}
   \label{fig:resultados}
 \end{figure}
 
@@ -620,6 +719,7 @@ editar directamente.
       \item Columnas monetarias con formato \texttt{\$\#,\#\#0.00}.
       \item Fórmulas nativas integradas (Subtotal, IVA, Total, Diferencias) que se recalculan automáticamente si editas los datos.
       \item KPIs de suma al pie de la tabla.
+      \item Disposición \textbf{Tamaño Carta Horizontal} preconfigurada para impresión.
     \end{itemize}
 \end{enumerate}
 
@@ -640,8 +740,17 @@ El motor intenta extraer el monto total en el siguiente orden de prioridad:
         ``Total''. Toma el valor máximo de la columna (no el primer valor).
   \item \textbf{Triangulación:} Busca tripletas (Cantidad, Precio Unitario, Total)
         que satisfagan $Q \times PU \approx T$.
-  \item \textbf{OCR:} Si la página no tiene texto nativo (PDF escaneado),
-        aplica reconocimiento óptico de caracteres.
+  \item \textbf{OCR avanzado de doble pasada:} Si la página es una imagen escaneada o
+        contiene una capa de texto invisible deficiente (como las incrustadas por
+        herramientas como \textit{iLovePDF}), el motor ignora la capa corrupta,
+        aplica preprocesamiento adaptativo (inversión localizada de fondos oscuros y
+        limpieza de resaltadores) y ejecuta PyTesseract a \texttt{3.0x}
+        (\texttt{spa+eng}). Si detecta inconsistencias matemáticas o ausencia de total,
+        escala automáticamente en una segunda pasada hacia RapidOCR (\texttt{2.5x}) y
+        valida el resultado contra montos escritos en letra (\texttt{00/100 M.N.}),
+        formatos europeos de moneda (ej.\ \texttt{6.887,35€}) y fechas en español,
+        inglés e italiano. También puede forzarse manualmente con la casilla
+        \textit{Forzar OCR de alta precisión}.
   \item \textbf{Pares adyacentes (G3):} Busca etiquetas como ``Total'',
         ``Importe total'' o ``Es de \$X'' y toma el número más cercano.
   \item \textbf{Búsqueda textual:} Extrae números con patrón monetario
@@ -701,8 +810,12 @@ extracción. Algunos mensajes comunes:
     IVA desglosado           & Se encontraron subtotal e IVA separados en el documento. \\
     IVA descompuesto del total & El motor calculó el IVA a partir del total detectado. \\
     Total (línea adyacente)  & El total se tomó de la línea inmediata al renglón con etiqueta ``Total''. \\
-    OCR                    & Se usó reconocimiento de caracteres (PDF escaneado); verificar valor. \\
-    Error:                   & Falló la extracción; el valor debe capturarse manualmente. \\
+    OCR                    & Se usó reconocimiento de caracteres (PDF escaneado o capa deficiente); verificar valor. \\
+    OCR-Precisión          & El motor escaló automáticamente a RapidOCR de alta precisión tras detectar dudas en la primera pasada. \\
+    OCR-Selectivo (tabla imagen) & La página tenía texto nativo, pero la tabla de precios venía incrustada como imagen y se aplicó OCR selectivo. \\
+    Total validado (subtotal + letra) & El total numérico se confirmó cruzándolo contra el importe escrito en letra. \\
+    Total por texto en letra — verificar & El total se recuperó únicamente a partir del texto escrito en letra; corroborar manualmente. \\
+    Error:                 & Falló la extracción; el valor debe capturarse manualmente. \\
     \bottomrule
   \end{tabularx}
   \caption{Mensajes comunes en la columna Observaciones.}
@@ -726,8 +839,8 @@ En el panel lateral (dentro de la sección \textbf{Proyecto}) encontrarás dos c
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.6\linewidth]{./images/08_validacion_normativa.png}
-  \caption{Controles de validación normativa en el panel lateral.}
+  \includegraphics[width=0.38\linewidth]{./images/08_validacion_normativa.png}
+  \caption{Controles de validación normativa y OCR en el panel lateral fijo de 310 px.}
 \end{figure}
 
 \section{Reglas Auditadas Automáticamente}
@@ -745,7 +858,7 @@ Al presionar el botón \btn{Extraer Montos}, el sistema ejecutará las siguiente
 \end{enumerate}
 
 \begin{warningbox}
-Las alertas normativas aparecerán en el panel amarillo superior de la tabla de resultados. Un resumen (ej. ``3 alerta(s) normativa(s)'') se mostrará en la barra de estado inferior. Estas alertas \textbf{no} te impiden exportar el Excel, son estrictamente de carácter consultivo.
+Las alertas normativas aparecerán en el panel de avisos superior de la tabla de resultados. Un resumen (ej. ``3 alerta(s) normativa(s)'') se mostrará en la barra de estado inferior. Estas alertas \textbf{no} te impiden exportar el Excel, son estrictamente de carácter consultivo.
 \end{warningbox}
 
 % =============================================================
@@ -763,7 +876,9 @@ El archivo guarda en un único documento portable:
 
 \begin{itemize}
   \item Los PDFs cargados (incrustados en base64).
-  \item El nombre del proyecto y el token de Banxico.
+  \item El nombre del proyecto, el token de Banxico, la \textit{Fecha solicitud},
+        la casilla \textit{PII solo compra de equipo} y el estado de
+        \textit{Forzar OCR de alta precisión}.
   \item La configuración de todas las secciones (rangos, tipos, rutas).
   \item La tabla completa de resultados con todas las ediciones manuales.
 \end{itemize}
@@ -812,11 +927,12 @@ propio archivo \texttt{.cshcp}.
 \section{La aplicación no arranca}
 
 \begin{itemize}
-  \item Verifica que la carpeta \texttt{\_internal} esté junto al ejecutable.
+  \item Verifica que estés ejecutando el archivo único \texttt{Conciliador.exe}
+        completo y no una descarga interrumpida.
   \item Si aparece el error de SmartScreen, haz clic en \textbf{Más información}
         → \textbf{Ejecutar de todas formas}.
-  \item Si el antivirus bloquea la app, agrega una excepción para la carpeta
-        \texttt{Conciliador}.
+  \item Si el antivirus bloquea la app (frecuente con ejecutables únicos
+        empaquetados), agrega una excepción para \texttt{Conciliador.exe}.
 \end{itemize}
 
 \section{No extrae el monto correcto}
@@ -824,8 +940,10 @@ propio archivo \texttt{.cshcp}.
 \begin{enumerate}
   \item Verifica que el rango de páginas esté correctamente configurado —
         la página donde aparece el total debe estar dentro del rango.
-  \item Si el PDF está escaneado (imagen), la extracción depende del OCR.
-        La calidad del escaneo afecta el resultado.
+  \item Si el PDF está escaneado, tiene fondos oscuros/negros, texto diminuto o
+        marcatextos sobre las cifras, activa la casilla
+        \textbf{Forzar OCR de alta precisión} en \textit{Documentos PDF} y vuelve
+        a extraer.
   \item Revisa la columna \campo{Observaciones} para entender qué estrategia
         se usó y por qué.
   \item Como último recurso, edita manualmente la celda de \campo{Total con IVA}.
@@ -839,8 +957,11 @@ del valor extraído.
 
 \section{La barra de scroll del panel lateral no aparece}
 
-La barra de desplazamiento vertical del panel lateral aparece automáticamente
-cuando el contenido es mayor que la ventana. Si no aparece:
+El panel lateral utiliza un ancho fijo de \texttt{310 px} y nunca emplea barra de
+desplazamiento horizontal (los títulos largos se abrevian dinámicamente con
+\texttt{...} y muestran el texto completo al pasar el cursor o al expandir la
+tarjeta). La barra de desplazamiento \textbf{vertical} aparece automáticamente
+cuando el contenido supera el alto de la ventana. Si no aparece:
 
 \begin{itemize}
   \item Asegúrate de que la ventana principal tenga al menos 700 px de alto.
@@ -887,9 +1008,18 @@ menús desplegables (Tipo, Moneda) o el contador de secciones:
 \begin{description}[leftmargin=0pt, style=nextline]
 
 \item[¿Puedo procesar PDFs escaneados?]
-Sí, pero la precisión depende de la calidad del escaneo. El motor usa OCR
-como estrategia de respaldo. Para mejores resultados, usa PDFs nativos
-(generados digitalmente, no escaneados).
+Sí. El Conciliador v6.6 detecta automáticamente páginas escaneadas y capas de texto
+OCR incrustadas deficientes (por ejemplo, de herramientas como \textit{iLovePDF}),
+aplica preprocesamiento adaptativo para fondos oscuros o marcatextos y combina
+PyTesseract con escalado automático hacia RapidOCR de alta precisión. Para
+documentos particularmente complejos puedes activar la casilla
+\textit{Forzar OCR de alta precisión} en \textit{Documentos PDF}.
+
+\item[¿Qué pasa si todas mis cotizaciones vienen juntas en un solo PDF?]
+Carga el archivo único y presiona el botón \btn{Auto-detectar secciones}. El sistema
+identificará automáticamente el \textit{Presupuesto Global} y cada cotización individual,
+mostrándote una ventana de revisión con casillas para confirmar qué secciones aplicar y
+ajustar cualquier rango de páginas antes de extraer.
 
 \item[¿Cuántos PDFs puedo cargar simultáneamente?]
 No hay límite técnico de archivos, pero el procesamiento es secuencial
@@ -916,8 +1046,10 @@ Sí, con la excepción de la consulta del tipo de cambio a Banxico.
 La extracción de montos y exportación a Excel funcionan sin conexión.
 
 \item[¿Qué formatos de fecha reconoce?]
-El motor detecta fechas en español (``15 de enero de 2026''), formato ISO
-(``2026-01-15'') y formato numérico con separadores (``15/01/2026'').
+El motor detecta fechas en español (``15 de enero de 2026''), inglés (``March 6, 2026'') e
+italiano (``09 febbraio 2026''), formato ISO (``2026-01-15'') y formato numérico con
+separadores (``15/01/2026''), priorizando siempre la fecha de emisión frente a fechas de
+vigencia o periodo del proyecto.
 
 \end{description}
 
@@ -933,10 +1065,13 @@ El motor detecta fechas en español (``15 de enero de 2026''), formato ISO
     \toprule
     \textbf{Módulo} & \textbf{Responsabilidad} \\
     \midrule
-    \texttt{engine.py}   & Motor de extracción puro. Contiene toda la lógica de
-                           negocio: análisis de PDF, OCR, Banxico, generación de Excel. \\
-    \texttt{main\_qt.py} & Interfaz gráfica PyQt6. Gestiona la UI, workers de fondo
-                           y comunicación entre componentes. \\
+    \texttt{engine.py}   & Motor de extracción puro. Contiene la lógica de negocio:
+                           análisis de PDF, \texttt{auto\_detect\_sections()} para PDF único,
+                           OCR multinivel (PyTesseract + RapidOCR + preprocesamiento),
+                           validación normativa EFIDEPORTE, API Banxico y generación de Excel. \\
+    \texttt{main\_qt.py} & Interfaz gráfica PyQt6. Gestiona la UI, el diálogo interactivo
+                           \texttt{AutoSectionsDialog}, workers de fondo (\texttt{AutoSectionWorker},
+                           \texttt{ExtractWorker}, \texttt{RenderWorker}) y comunicación entre paneles. \\
     \bottomrule
   \end{tabularx}
   \caption{Módulos principales de la aplicación.}
@@ -948,19 +1083,21 @@ El motor detecta fechas en español (``15 de enero de 2026''), formato ISO
   \centering
   \begin{tabularx}{\linewidth}{llX}
     \toprule
-    \textbf{Paquete} & \textbf{Versión} & \textbf{Uso} \\
+    \textbf{Paquete / Binario} & \textbf{Versión} & \textbf{Uso} \\
     \midrule
     PyQt6         & $\geq$6.7  & Interfaz gráfica nativa \\
-    PyMuPDF       & $\geq$1.24 & Renderizado y extracción de texto PDF \\
+    PyMuPDF       & $\geq$1.24 & Renderizado, lectura de marcadores y extracción de texto PDF \\
     pdfplumber    & $\geq$0.11 & Análisis estructural de tablas PDF \\
     pandas        & $\geq$2.2  & Manipulación de datos tabulares \\
-    numpy         & $\geq$2.0  & Operaciones numéricas \\
+    numpy         & $\geq$2.0  & Preprocesamiento de imagen y operaciones numéricas \\
+    Pillow        & $\geq$10.0 & Filtrado adaptativo y preparación de imágenes para OCR \\
     openpyxl      & $\geq$3.1  & Generación de archivos Excel \\
-    rapidocr      & 1.2.x      & OCR para PDFs escaneados (Python 3.14) \\
+    pytesseract + Tesseract & 5.x (\texttt{spa}/\texttt{eng}) & Motor OCR primario y análisis rápido de páginas escaneadas \\
+    rapidocr      & 1.2.x      & Motor OCR ONNX de alta precisión (segunda pasada / fondos complejos) \\
     requests      & $\geq$2.31 & Consultas HTTP a la API de Banxico \\
     \bottomrule
   \end{tabularx}
-  \caption{Dependencias de la aplicación (incluidas en la carpeta \texttt{\_internal}).}
+  \caption{Dependencias de la aplicación (empaquetadas en el ejecutable único \texttt{Conciliador.exe}).}
 \end{table}
 
 \section{Expresiones regulares principales}
