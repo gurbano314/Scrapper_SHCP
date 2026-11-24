@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import datetime
 import os
+import re
 import sys
 
 import pandas as pd
+try:
+    import pymupdf as _fitz
+except ImportError:
+    import fitz as _fitz
 from PyQt6.QtCore import (
-    QByteArray, QDate, QSize, Qt, QThread, pyqtSignal
+    QByteArray, QDate, Qt, QThread, pyqtSignal
 )
 from PyQt6.QtGui import (
-    QColor, QFontMetrics, QPixmap, QTransform
+    QColor, QFontMetrics, QIcon, QPixmap, QTransform
 )
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog,
@@ -26,6 +31,15 @@ from PyQt6.QtWidgets import (
 )
 
 import engine
+
+
+def _resource_path(rel_path: str) -> str:
+    """Resuelve rutas relativas tanto en desarrollo como dentro de PyInstaller."""
+    if hasattr(sys, "_MEIPASS"):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel_path)
 
 # ─────────────────────────────────────────────────────────────
 # PALETA DE COLORES
@@ -307,8 +321,8 @@ class NoScrollSpinBox(QSpinBox):
 
 class RenderWorker(QThread):
     """Renderiza una página del PDF en segundo plano."""
-    finished = pyqtSignal(int, QPixmap)   # (page_idx, pixmap)
-    failed   = pyqtSignal(int)            # (page_idx)
+    page_rendered = pyqtSignal(int, QPixmap)   # (page_idx, pixmap)
+    failed        = pyqtSignal(int)            # (page_idx)
 
     def __init__(self, pdf_bytes: bytes, idx: int, scale: float = 1.5):
         super().__init__()
@@ -321,7 +335,7 @@ class RenderWorker(QThread):
         if png:
             pm = QPixmap()
             pm.loadFromData(QByteArray(png))
-            self.finished.emit(self._idx, pm)
+            self.page_rendered.emit(self._idx, pm)
         else:
             self.failed.emit(self._idx)
 
@@ -834,12 +848,12 @@ class SectionWidget(QWidget):
 # PANEL LATERAL DE CONFIGURACIÓN
 # ─────────────────────────────────────────────────────────────
 class ConfigPanel(QWidget):
-    extract_requested     = pyqtSignal(list, str)  # (sec_configs, bx_token)
-    pdf_loaded            = pyqtSignal()
+    extract_requested      = pyqtSignal(list, str)  # (sec_configs, bx_token)
+    pdf_loaded             = pyqtSignal()
     token_update_requested = pyqtSignal(str)
-    section_deleted       = pyqtSignal(str)        # Emite el label de la sección eliminada
-    auto_detect_requested = pyqtSignal()
-    sections_changed      = pyqtSignal(list)
+    section_deleted        = pyqtSignal(int)        # Índice 0-based eliminado
+    auto_detect_requested  = pyqtSignal()
+    sections_changed       = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1053,30 +1067,48 @@ class ConfigPanel(QWidget):
                 self._sec_layout.insertWidget(i, sw)
                 self._sec_widgets.append(sw)
         else:
-            # Eliminar solo los que sobran del final
+            # Eliminar solo los que sobran del final y sincronizar filas de DataPanel
             for i in range(current_n - 1, n - 1, -1):
                 w = self._sec_widgets.pop()
                 self._sec_layout.removeWidget(w)
                 w.deleteLater()
+                if not self._batch_updating:
+                    self.section_deleted.emit(i)
         self._emit_sections_changed()
 
     def _remove_section(self, sw: SectionWidget):
-        label = sw.le_label.text().strip()
-        if sw in self._sec_widgets:
-            self._sec_widgets.remove(sw)
-            self._sec_layout.removeWidget(sw)
-            sw.deleteLater()
-
-            for i, rem_sw in enumerate(self._sec_widgets):
-                rem_sw.set_index(i)
-            
-            # Ajustar el spinbox sin disparar _rebuild_sections
-            self.sb_nsec.blockSignals(True)
-            self.sb_nsec.setValue(len(self._sec_widgets))
-            self.sb_nsec.blockSignals(False)
-            
-            self.section_deleted.emit(label)
+        if sw not in self._sec_widgets:
+            return
+        idx = self._sec_widgets.index(sw)
+        if len(self._sec_widgets) <= 1:
+            max_p = self._max_pages()[0] if self._max_pages() else 1
+            sw.blockSignals(True)
+            sw.le_label.setText("Sección 1")
+            sw.cb_tipo.setCurrentIndex(0)
+            sw.sb_p0.setValue(1)
+            sw.sb_p1.setValue(max_p)
+            sw.btn_toggle.setChecked(False)
+            sw._toggle(False)
+            sw.blockSignals(False)
+            sw._update_header_text()
+            self.section_deleted.emit(0)
             self._emit_sections_changed()
+            return
+
+        self._sec_widgets.remove(sw)
+        self._sec_layout.removeWidget(sw)
+        sw.deleteLater()
+
+        for i, rem_sw in enumerate(self._sec_widgets):
+            rem_sw.set_index(i)
+
+        # Ajustar el spinbox sin disparar _rebuild_sections
+        self.sb_nsec.blockSignals(True)
+        self.sb_nsec.setValue(len(self._sec_widgets))
+        self.sb_nsec.blockSignals(False)
+
+        self.section_deleted.emit(idx)
+        self._emit_sections_changed()
 
     def _open_pdfs(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -1084,7 +1116,6 @@ class ConfigPanel(QWidget):
         )
         if not paths:
             return
-        import fitz as _fitz
         new_files = []
         for p in paths:
             with open(p, "rb") as fh:
@@ -1246,9 +1277,11 @@ class ConfigPanel(QWidget):
         if "pdf_files" in state:
             self._pdf_files = []
             for pdf in state["pdf_files"]:
+                raw_bytes = base64.b64decode(pdf["bytes"])
                 self._pdf_files.append({
-                    "name": pdf["name"],
-                    "bytes": base64.b64decode(pdf["bytes"]),
+                    "name":  pdf["name"],
+                    "bytes": raw_bytes,
+                    "hash":  engine._md5(raw_bytes),
                     "pages": pdf["pages"]
                 })
             self._refresh_pdf_ui()
@@ -1290,6 +1323,7 @@ class PDFViewer(QWidget):
         self._current_page: int      = 0
         self._page_cache: dict[int, QPixmap] = {}
         self._render_worker: RenderWorker | None = None
+        self._active_workers: set[RenderWorker] = set()
         self._zoom_level = 1.0
         self._rotation_angle = 0
         self._build()
@@ -1398,11 +1432,21 @@ class PDFViewer(QWidget):
         self._request_render(0)
 
     def clear(self):
+        if self._render_worker is not None:
+            try:
+                self._render_worker.page_rendered.disconnect(self._on_rendered)
+            except TypeError:
+                pass
+            try:
+                self._render_worker.failed.disconnect()
+            except TypeError:
+                pass
         self._pdf_bytes   = b""
         self._total_pages = 0
         self._current_page = 0
         self._page_cache.clear()
         self.pixmap_item.setPixmap(QPixmap())
+        self.lbl_section.setVisible(False)
         self._update_nav()
 
     def _go_to(self, target: int):
@@ -1440,16 +1484,20 @@ class PDFViewer(QWidget):
         """Lanza un hilo de render para el índice dado."""
         if not self._pdf_bytes:
             return
-        # Si ya hay un worker corriendo para otra página, se le deja terminar;
-        # el resultado se cachea aunque ya no sea la página visible.
-        worker = RenderWorker(self._pdf_bytes, idx, scale=1.5)
-        worker.finished.connect(self._on_rendered)
-        worker.failed.connect(lambda i: print(f"Error al renderizar pág. {i + 1}"))
-        # Guardar referencia para evitar GC prematuro
         if self._render_worker is not None:
-            # No matamos el worker anterior, sólo actualizamos la referencia
-            self._render_worker.finished.disconnect()
-            self._render_worker.failed.disconnect()
+            try:
+                self._render_worker.page_rendered.disconnect(self._on_rendered)
+            except TypeError:
+                pass
+            try:
+                self._render_worker.failed.disconnect()
+            except TypeError:
+                pass
+        worker = RenderWorker(self._pdf_bytes, idx, scale=1.5)
+        worker.page_rendered.connect(self._on_rendered)
+        worker.failed.connect(lambda i: print(f"Error al renderizar pág. {i + 1}"))
+        self._active_workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._active_workers.discard(w))
         self._render_worker = worker
         worker.start()
 
@@ -1544,12 +1592,19 @@ COL_WIDTHS = {
 
 
 class DataPanel(QWidget):
+    data_edited = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._df: pd.DataFrame | None = None
         self._updating = False
         self._manual_edits: set[tuple[int, str]] = set()
+        self._proyecto: str = ""
+        self._token: str = ""
         self._build()
+
+    def set_proyecto(self, proyecto: str):
+        self._proyecto = proyecto.strip()
 
     def get_state(self) -> dict:
         import json
@@ -1561,8 +1616,7 @@ class DataPanel(QWidget):
             "manual_edits": manual_edits_list
         }
 
-    def load_state(self, state: dict):
-        import pandas as pd
+    def load_state(self, state: dict, proyecto: str = "", token: str = ""):
         if "df" in state and state["df"] is not None:
             df = pd.DataFrame(state["df"]).reindex(columns=engine._COLS)
         else:
@@ -1573,8 +1627,20 @@ class DataPanel(QWidget):
             self._manual_edits = set(tuple(x) for x in edits)
         else:
             self._manual_edits = set()
-            
-        self.load_data(df)
+
+        self._proyecto = proyecto or getattr(self, "_proyecto", "")
+        self._token = token or getattr(self, "_token", "")
+        if df.empty:
+            self._df = df
+            self._updating = True
+            self.table.setRowCount(0)
+            self._updating = False
+            self._refresh_kpis()
+            self.btn_export.setEnabled(False)
+            self.lbl_placeholder.setVisible(True)
+            self._check_warnings()
+        else:
+            self.load_data(df, self._proyecto, self._token)
 
     def get_current_state(self):
         return self._df, self._manual_edits
@@ -1660,7 +1726,7 @@ class DataPanel(QWidget):
         self.btn_export.clicked.connect(self._export_excel)
 
         self.btn_template = QPushButton("📄  Plantilla vacía")
-        self.btn_template.setEnabled(False)
+        self.btn_template.setEnabled(True)
         self.btn_template.clicked.connect(self._export_template)
 
         btn_row.addWidget(self.btn_export)
@@ -1721,7 +1787,6 @@ class DataPanel(QWidget):
             return
             
         self.set_token(new_token)
-        import datetime
         from engine import banxico_tc
         
         updated = False
@@ -1762,19 +1827,39 @@ class DataPanel(QWidget):
         if updated:
             self._refresh_kpis()
             self._check_warnings()
+            self.data_edited.emit()
             QMessageBox.information(self, "Token Aplicado", "Se han convertido las filas pendientes usando el nuevo token.")
         else:
             QMessageBox.information(self, "Token Aplicado", "El token es válido, pero no había filas pendientes por convertir.")
 
-    def remove_section_row(self, label: str):
-        if self._df is None or "Sección" not in self._df.columns:
+    def remove_section_row(self, row_idx: int):
+        if self._df is None or row_idx < 0 or row_idx >= len(self._df):
             return
-            
-        idx_to_drop = self._df[self._df["Sección"] == label].index
-        if not idx_to_drop.empty:
-            self._df = self._df.drop(idx_to_drop).reset_index(drop=True)
-            self._manual_edits.clear()
-            self.load_data(self._df, getattr(self, "_proyecto", ""), getattr(self, "_token", ""))
+
+        self._df = self._df.drop(self._df.index[row_idx]).reset_index(drop=True)
+        self._manual_edits = {
+            (r - 1 if r > row_idx else r, c)
+            for (r, c) in self._manual_edits
+            if r != row_idx
+        }
+        if self._df.empty:
+            self._updating = True
+            self.table.setRowCount(0)
+            self._updating = False
+            self._kpi_prov[1].setText("$ 0.00")
+            self._kpi_anx[1].setText("$ 0.00")
+            self._kpi_anx[2].setText("Monto Anexo Manual")
+            self._kpi_dif[1].setText("$ 0.00")
+            self._kpi_dif[1].setStyleSheet(f"font-size:18px; font-weight:bold; color:{ACCENT_LITE};")
+            self.btn_export.setEnabled(False)
+            self.lbl_placeholder.setVisible(True)
+            self._check_warnings()
+            self.data_edited.emit()
+            return
+
+        self._df["Nº Sec"] = list(range(1, len(self._df) + 1))
+        self.load_data(self._df, getattr(self, "_proyecto", ""), getattr(self, "_token", ""))
+        self.data_edited.emit()
 
     def _populate_table(self, df: pd.DataFrame):
         self.table.setRowCount(0)
@@ -1823,6 +1908,7 @@ class DataPanel(QWidget):
             self._recalc_currency(r, str(old_val), str(new_val))
         else:
             self._refresh_kpis()
+        self.data_edited.emit()
 
     def _recalc_currency(self, r: int, old_curr: str, new_curr: str):
         if not hasattr(self, "_token") or not self._token:
@@ -1831,7 +1917,6 @@ class DataPanel(QWidget):
             if hasattr(self, 'warnings_scroll'): self.warnings_scroll.setVisible(True)
             return
             
-        import datetime
         from engine import banxico_tc
         
         fecha_str = self._df.at[r, "Fecha"]
@@ -1887,7 +1972,7 @@ class DataPanel(QWidget):
             if pd.notna(tot):
                 tot = float(tot)
                 qty = self._df.at[r, "Cantidad"]
-                qty = float(qty) if pd.notna(qty) else 1.0
+                qty = float(qty) if (pd.notna(qty) and float(qty) > 0) else 1.0
                 has_iva = str(self._df.at[r, "(+ IVA)"]).strip().lower() in ["sí", "si", "incluido"]
                 
                 if has_iva:
@@ -1922,10 +2007,11 @@ class DataPanel(QWidget):
             item.setText(display)
             self._updating = False
             self._refresh_kpis()
+        self.data_edited.emit()
 
     def _recalc_and_refresh_row(self, r: int, forward: bool = True):
         qty = self._df.at[r, "Cantidad"]
-        qty = float(qty) if pd.notna(qty) else 1.0
+        qty = float(qty) if (pd.notna(qty) and float(qty) > 0) else 1.0
         pu = self._df.at[r, "Precio Unitario"]
         has_iva = str(self._df.at[r, "(+ IVA)"]).strip().lower() in ["sí", "si", "incluido"]
         
@@ -2015,12 +2101,18 @@ class DataPanel(QWidget):
         self.lbl_warnings.setVisible(True)
         if hasattr(self, 'warnings_scroll'): self.warnings_scroll.setVisible(True)
 
+    @staticmethod
+    def _sanitize_filename(name: str) -> str:
+        clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", (name or "Cotizaciones").strip())
+        clean = re.sub(r"[\s_]+", "_", clean).strip("_.")
+        return clean or "Cotizaciones"
+
     def _export_excel(self):
-        if self._df is None:
+        if self._df is None or self._df.empty:
             return
         proyecto = getattr(self, "_proyecto", "")
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        name = (proyecto or "Cotizaciones").replace(" ", "_")
+        name = self._sanitize_filename(proyecto or "Cotizaciones")
         path, _ = QFileDialog.getSaveFileName(
             self, "Guardar Excel",
             f"Conciliacion_{name}_{ts}.xlsx",
@@ -2037,10 +2129,8 @@ class DataPanel(QWidget):
             QMessageBox.critical(self, "Error", f"No se pudo guardar:\n{exc}")
 
     def _export_template(self):
-        if self._df is None:
-            return
         proyecto = getattr(self, "_proyecto", "")
-        name = (proyecto or "Cotizaciones").replace(" ", "_")
+        name = self._sanitize_filename(proyecto or "Cotizaciones")
         path, _ = QFileDialog.getSaveFileName(
             self, "Guardar Plantilla Vacía",
             f"Plantilla_{name}.xlsx",
@@ -2049,8 +2139,22 @@ class DataPanel(QWidget):
         if not path:
             return
         try:
+            df_src = self._df
+            if df_src is None or df_src.empty:
+                df_src = pd.DataFrame([
+                    {
+                        **{k: None for k in engine._COLS},
+                        "Nº Sec": i + 1,
+                        "Tipo": "Cotización Proveedor",
+                        "QT": "Sí",
+                        "T. Cambio": "MXN",
+                        "(+ IVA)": "Sí",
+                        "Cantidad": 1,
+                    }
+                    for i in range(5)
+                ]).reindex(columns=engine._COLS)
             # Enviamos flag blank=True para que to_excel mantenga todo excepto numéricos
-            data = engine.to_excel(self._df, nombre=proyecto, blank=True)
+            data = engine.to_excel(df_src, nombre=proyecto, blank=True)
             with open(path, "wb") as fh:
                 fh.write(data)
             QMessageBox.information(self, "Éxito", f"Plantilla guardada en:\n{path}")
@@ -2065,12 +2169,16 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Conciliador de Cotizaciones v6.6")
+        icon_path = _resource_path(os.path.join("assets", "icon.ico"))
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         self.resize(1400, 860)
         self._extract_worker: ExtractWorker | None = None
         self._auto_sec_worker: AutoSectionWorker | None = None
         self._pdf_combined_bytes: bytes = b""
         self._pdf_files: list[dict]     = []
         self._sec_cfgs:  list[dict]     = []
+        self._extract_warnings: list[str] = []
         self._current_project_file: str = ""
         self._save_worker = None  # Keep reference to prevent GC
         self._build()
@@ -2166,8 +2274,18 @@ class MainWindow(QMainWindow):
 
         self.data_panel = DataPanel()
         self.config_panel.section_deleted.connect(self.data_panel.remove_section_row)
+        self.config_panel.le_proyecto.textChanged.connect(self.data_panel.set_proyecto)
         self.config_panel.le_token.textChanged.connect(self.data_panel.set_token)
         self.config_panel.token_update_requested.connect(self.data_panel.apply_token)
+        self.config_panel.de_fecha_solicitud.dateChanged.connect(
+            lambda *_: self._run_normative_validation(update_status=False)
+        )
+        self.config_panel.chk_pii_equipo.toggled.connect(
+            lambda *_: self._run_normative_validation(update_status=False)
+        )
+        self.data_panel.data_edited.connect(
+            lambda: self._run_normative_validation(update_status=False)
+        )
         splitter.addWidget(self.data_panel)
         splitter.setSizes([400, 600])
 
@@ -2185,7 +2303,12 @@ class MainWindow(QMainWindow):
         if not files:
             self.pdf_viewer.clear()
             return
-        combined_bytes, _, total_pages, _ = engine.build_combined_pdf(files)
+        try:
+            combined_bytes, _, total_pages, _ = engine.build_combined_pdf(files)
+        except Exception as exc:
+            self.pdf_viewer.clear()
+            self.status.showMessage(f"Error al cargar PDF en visor: {exc}", 5000)
+            return
         self._pdf_combined_bytes = combined_bytes
         self.pdf_viewer.load_pdf(combined_bytes, total_pages)
         self.status.showMessage(
@@ -2194,7 +2317,8 @@ class MainWindow(QMainWindow):
 
     def _on_page_changed(self, page_idx: int):
         # Mostrar indicador de sección
-        for cfg in self._sec_cfgs:
+        df_cur = getattr(self.data_panel, "_df", None)
+        for sec_i, cfg in enumerate(self._sec_cfgs):
             pdf_idx = cfg.get("pdf_idx", 0)
             offset = sum(
                 f["pages"] for f in self._pdf_files[:pdf_idx]
@@ -2202,10 +2326,15 @@ class MainWindow(QMainWindow):
             g_p0 = offset + cfg["p0"] - 1
             g_p1 = offset + cfg["p1"] - 1
             if g_p0 <= page_idx <= g_p1:
-                self.pdf_viewer.set_section_label(
-                    f"{'🌐' if cfg.get('tipo') == 'Presupuesto Global' else '📑'} "
-                    f"{cfg['label']} · {cfg.get('moneda', 'MXN')}"
-                )
+                icon = "🌐" if cfg.get("tipo") == "Presupuesto Global" else "📑"
+                moneda = None
+                if df_cur is not None and sec_i < len(df_cur) and "T. Cambio" in df_cur.columns:
+                    val = df_cur.iloc[sec_i].get("T. Cambio")
+                    if pd.notna(val) and str(val).strip():
+                        moneda = str(val).strip()
+                p_rng = f"p.{cfg['p0']}" if cfg["p1"] == cfg["p0"] else f"p.{cfg['p0']}-{cfg['p1']}"
+                suffix = moneda if moneda else p_rng
+                self.pdf_viewer.set_section_label(f"{icon} {cfg['label']} · {suffix}")
                 return
         self.pdf_viewer.set_section_label("")
 
@@ -2296,6 +2425,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Sin PDF", "Carga al menos un PDF antes de extraer.")
             return
         self._sec_cfgs = cfgs
+        self._extract_warnings = []
         self.config_panel.btn_extract.setEnabled(False)
         self.progress_bar.setMaximum(len(cfgs))
         self.progress_bar.setValue(0)
@@ -2309,13 +2439,44 @@ class MainWindow(QMainWindow):
             force_ocr=self.config_panel.chk_force_ocr.isChecked(),
         )
         self._extract_worker.progress.connect(self._on_extract_progress)
-        self._extract_worker.warning.connect(self.data_panel.add_warning)
+        self._extract_worker.warning.connect(self._on_extract_warning)
         self._extract_worker.finished.connect(self._on_extract_finished)
         self._extract_worker.start()
+
+    def _on_extract_warning(self, msg: str):
+        if msg and msg not in self._extract_warnings:
+            self._extract_warnings.append(msg)
+        self.data_panel.add_warning(msg)
 
     def _on_extract_progress(self, current: int, total: int, label: str):
         self.progress_bar.setValue(current)
         self.status.showMessage(f"Extrayendo {current}/{total}: {label}…")
+
+    def _run_normative_validation(self, update_status: bool = False) -> list[str]:
+        self.data_panel._check_warnings()
+        for msg in self._extract_warnings:
+            self.data_panel.add_warning(msg)
+        df_cur = getattr(self.data_panel, "_df", None)
+        if df_cur is None or df_cur.empty:
+            return []
+        qd = self.config_panel.de_fecha_solicitud.date()
+        fecha_sol = datetime.date(qd.year(), qd.month(), qd.day())
+        pii_equipo = self.config_panel.chk_pii_equipo.isChecked()
+        norm_warnings = engine.validate_normative(
+            df_cur,
+            fecha_solicitud=fecha_sol,
+            pii_solo_equipo=pii_equipo,
+        )
+        for w in norm_warnings:
+            self.data_panel.add_warning(w)
+        if update_status:
+            n_norm = len(norm_warnings)
+            self.status.showMessage(
+                f"Validación normativa · {n_norm} alerta(s)"
+                if n_norm else "✅ Sin alertas normativas",
+                4000,
+            )
+        return norm_warnings
 
     def _on_extract_finished(self, results: list):
         self.progress_bar.setVisible(False)
@@ -2332,18 +2493,9 @@ class MainWindow(QMainWindow):
         df_new = engine.recalc_derived(df_new)
         self.data_panel.load_data(df_new, self.config_panel.get_proyecto(), self.config_panel.le_token.text().strip())
 
-        # ── Validación Normativa EFIDEPORTE ──────────────────
-        import datetime as _dt
-        qd = self.config_panel.de_fecha_solicitud.date()
-        fecha_sol = _dt.date(qd.year(), qd.month(), qd.day())
-        pii_equipo = self.config_panel.chk_pii_equipo.isChecked()
-        norm_warnings = engine.validate_normative(
-            df_new,
-            fecha_solicitud=fecha_sol,
-            pii_solo_equipo=pii_equipo,
-        )
-        for w in norm_warnings:
-            self.data_panel.add_warning(w)
+        # ── Validación Normativa EFIDEPORTE y avisos acumulados ──
+        norm_warnings = self._run_normative_validation(update_status=False)
+        self._on_page_changed(self.pdf_viewer.current_page())
 
         n_norm = len(norm_warnings)
         self.status.showMessage(
@@ -2404,10 +2556,9 @@ class MainWindow(QMainWindow):
                             pass
                         # pandas Timestamp / NaT
                         try:
-                            import pandas as pd
                             if isinstance(o, pd.Timestamp): return o.isoformat()
                             if o is pd.NaT: return None
-                        except ImportError:
+                        except TypeError:
                             pass
                         return super().default(o)
 
@@ -2448,14 +2599,20 @@ class MainWindow(QMainWindow):
                     with open(file_path, "r", encoding="latin-1") as f:
                         state = json.load(f)
                 
+                self._extract_warnings = []
                 # Para retrocompatibilidad
                 if "config" in state:
                     self.config_panel.load_state(state["config"])
                     if "data" in state:
-                        self.data_panel.load_state(state["data"])
+                        self.data_panel.load_state(
+                            state["data"],
+                            proyecto=self.config_panel.get_proyecto(),
+                            token=self.config_panel.le_token.text().strip(),
+                        )
                 else:
                     self.config_panel.load_state(state)
-                
+
+                self._run_normative_validation(update_status=False)
                 self._current_project_file = file_path
                 self.status.showMessage(f"Proyecto cargado desde {file_path}", 3000)
             except Exception as e:
@@ -2472,6 +2629,15 @@ class MainWindow(QMainWindow):
             "Sin dependencias de servidor web."
         )
 
+    def closeEvent(self, event):
+        for w in list(getattr(self.pdf_viewer, "_active_workers", ())):
+            if w.isRunning():
+                w.wait(2000)
+        for w in (self._extract_worker, self._auto_sec_worker, self._save_worker):
+            if w is not None and w.isRunning():
+                w.wait(2000)
+        super().closeEvent(event)
+
 
 # ─────────────────────────────────────────────────────────────
 # ENTRY POINT
@@ -2484,6 +2650,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Conciliador de Cotizaciones")
     app.setOrganizationName("Conciliador")
+    icon_path = _resource_path(os.path.join("assets", "icon.ico"))
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     app.setStyle("Fusion")
     app.setStyleSheet(QSS)
 

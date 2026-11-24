@@ -430,13 +430,19 @@ automáticamente y su fila se elimina de la tabla de resultados.
 El panel central muestra el PDF activo página por página.
 
 \begin{itemize}
-  \item \textbf{Paneo y Zoom}: Puedes acercar o alejar el documento. Si el documento tiene zoom, haz clic sostenido y arrastra con el ratón para desplazar la hoja libremente.
+  \item \textbf{Paneo y Zoom}: Usa los botones \btn{-}, \btn{1:1} y \btn{+} para
+        alejar, restablecer al ancho de vista o acercar el documento. Cuando el
+        documento tiene zoom, haz clic sostenido y arrastra con el ratón para
+        desplazar la hoja libremente.
+  \item \textbf{Rotación}: Utiliza los dos botones de rotación situados a la derecha
+        del zoom para girar la vista en pasos de $90^\circ$ a la izquierda o a la
+        derecha cuando una cotización venga escaneada en horizontal.
   \item \textbf{< / >}: página anterior / siguiente.
   \item \textbf{Spinner de página}: escribe directamente el número de página y
         presiona \tecla{Enter} para saltar.
   \item \textbf{Indicador de sección}: cuando la página cae dentro del rango
         configurado para alguna sección, aparece una etiqueta de color vino
-        indicando a qué sección corresponde.
+        indicando a qué sección corresponde y su rango o divisa.
 \end{itemize}
 
 \begin{notabox}
@@ -782,9 +788,10 @@ Cuando la moneda seleccionada es USD, EUR o CAD:
 
 \begin{enumerate}
   \item El motor consulta la API del Banco de México usando el token configurado.
-  \item Obtiene la cotización del día anterior hábil.
+  \item Obtiene la cotización publicada para la \textbf{fecha de emisión} de cada
+        cotización (con búsqueda de hasta 5 días previos ante días inhábiles).
   \item Multiplica el monto por el tipo de cambio.
-  \item La columna \campo{T. Cambio} muestra la divisa y la tasa usada.
+  \item La columna \campo{T. Cambio} muestra la divisa y la tasa aplicada en \campo{Observaciones}.
 \end{enumerate}
 
 \begin{consejobox}
@@ -845,7 +852,10 @@ En el panel lateral (dentro de la sección \textbf{Proyecto}) encontrarás dos c
 
 \section{Reglas Auditadas Automáticamente}
 
-Al presionar el botón \btn{Extraer Montos}, el sistema ejecutará las siguientes 7 validaciones sobre la tabla generada:
+Al presionar el botón \btn{Extraer Montos} (y de forma automática cada vez que
+modifiques la \campo{Fecha solicitud}, actives \textit{PII solo compra de equipo},
+cargues un proyecto \texttt{.cshcp} o edites rubros, fechas o montos en la tabla),
+el sistema ejecutará las siguientes 7 validaciones:
 
 \begin{enumerate}
     \item \textbf{Vigencia de cotizaciones (Regla 2, pág. 10):} Verifica que la fecha de la cotización no exceda 90 días respecto a la \textit{Fecha de solicitud}.
@@ -1093,7 +1103,7 @@ vigencia o periodo del proyecto.
     Pillow        & $\geq$10.0 & Filtrado adaptativo y preparación de imágenes para OCR \\
     openpyxl      & $\geq$3.1  & Generación de archivos Excel \\
     pytesseract + Tesseract & 5.x (\texttt{spa}/\texttt{eng}) & Motor OCR primario y análisis rápido de páginas escaneadas \\
-    rapidocr      & 1.2.x      & Motor OCR ONNX de alta precisión (segunda pasada / fondos complejos) \\
+    rapidocr-onnxruntime & 1.2.x      & Motor OCR ONNX de alta precisión (segunda pasada / fondos complejos) \\
     requests      & $\geq$2.31 & Consultas HTTP a la API de Banxico \\
     \bottomrule
   \end{tabularx}

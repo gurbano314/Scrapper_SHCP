@@ -60,7 +60,10 @@ def _resolve_tess_lang(preferred: str = "spa+eng") -> str:
             return "eng"
     return "spa"
 
-import fitz          # PyMuPDF
+try:
+    import pymupdf as fitz  # PyMuPDF
+except ImportError:
+    import fitz
 import numpy as np
 import openpyxl
 import pandas as pd
@@ -309,6 +312,11 @@ def validate_normative(
     if df_norm.empty:
         return []
 
+    # Separar cotizaciones individuales del Presupuesto Global para no duplicar totales
+    tipo_col = df_norm["Tipo"].astype(str).str.strip()
+    df_prov = df_norm[tipo_col != "Presupuesto Global"]
+    df_presup = df_norm[tipo_col == "Presupuesto Global"]
+
     # ── 1. Vigencia de cotizaciones ──────────────────────────
     if fecha_solicitud is not None:
         for idx, row in df_norm.iterrows():
@@ -332,10 +340,13 @@ def validate_normative(
                 pass
 
     # ── 2. Tope gastos administrativos ≤ 5% ──────────────────
-    total_global = pd.to_numeric(df_norm["Total con IVA"], errors="coerce").sum()
+    total_prov = float(pd.to_numeric(df_prov["Total con IVA"], errors="coerce").sum())
+    total_presup = float(pd.to_numeric(df_presup["Total con IVA"], errors="coerce").sum())
+    total_global = total_presup if total_presup > 0 else total_prov
+
     admin_total = 0.0
     admin_rubros: list[str] = []
-    for idx, row in df_norm.iterrows():
+    for idx, row in df_prov.iterrows():
         rubro = str(row.get("Rubro", ""))
         if _ADMIN_KEYWORDS_RE.search(rubro):
             monto = _safe_f(row.get("Total con IVA"))
@@ -356,6 +367,8 @@ def validate_normative(
 
     # ── 3. Detección de rubros prohibidos ────────────────────
     for idx, row in df_norm.iterrows():
+        if str(row.get("Tipo", "")).strip() == "Presupuesto Global":
+            continue
         rubro = str(row.get("Rubro", ""))
         if _RUBROS_PROHIBIDOS_RE.search(rubro):
             warnings.append(
@@ -367,6 +380,8 @@ def validate_normative(
     # ── 4. Detección de duplicados ───────────────────────────
     rubros_vistos: list[tuple[str, float, int]] = []  # (rubro_lower, total, idx)
     for idx, row in df_norm.iterrows():
+        if str(row.get("Tipo", "")).strip() == "Presupuesto Global":
+            continue
         rubro = str(row.get("Rubro", "")).strip().lower()
         total = _safe_f(row.get("Total con IVA"))
         if not rubro or total is None:
@@ -384,12 +399,12 @@ def validate_normative(
 
     # ── 5. Verificación de seguro obligatorio ────────────────
     tiene_seguro = False
-    for idx, row in df_norm.iterrows():
+    for idx, row in df_prov.iterrows():
         rubro = str(row.get("Rubro", ""))
         if _SEGURO_RE.search(rubro):
             tiene_seguro = True
             break
-    if not tiene_seguro and len(df_norm) >= 3:
+    if not tiene_seguro and len(df_prov) >= 3:
         warnings.append(
             "📋 No se detectó un rubro de seguro en el presupuesto. "
             "Los lineamientos exigen un seguro con cobertura total del "
@@ -1038,7 +1053,7 @@ def banxico_tc(
     if moneda not in _BANXICO_SERIES or not token:
         return None
     cache_key = (moneda, fecha.isoformat())
-    if cache_key in _BX_CACHE:
+    if cache_key in _BX_CACHE and _BX_CACHE[cache_key] is not None:
         return _BX_CACHE[cache_key]
     serie = _BANXICO_SERIES[moneda]
     f_ini = (fecha - datetime.timedelta(days=5)).isoformat()
@@ -1052,7 +1067,6 @@ def banxico_tc(
         resp.raise_for_status()
         datos = resp.json()["bmx"]["series"][0]["datos"]
         if not datos:
-            _BX_CACHE[cache_key] = None
             return None
         tc = float(datos[-1]["dato"].replace(",", ""))
         _BX_CACHE[cache_key] = tc
@@ -1063,7 +1077,6 @@ def banxico_tc(
             on_warning(msg)
         else:
             print(f"[engine] {msg}", file=sys.stderr)
-        _BX_CACHE[cache_key] = None
         return None
 
 
@@ -1107,17 +1120,12 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
             sub = round(qty * unit, 2)
         if sub is not None:
             if iva is None:
-                if has_iva:
+                if has_iva or iva_incl:
                     iva = round(sub * 0.16, 2)
-                elif iva_incl:
-                    iva = round(sub - sub / 1.16, 2)
                 elif iva_exento:
                     iva = 0.0
             if tot is None:
-                if iva_incl and iva is not None:
-                    tot = round(sub / 1.16 + iva, 2)
-                else:
-                    tot = round(sub + (iva or 0), 2)
+                tot = round(sub + (iva or 0), 2)
 
         df.at[idx, "Cantidad"]           = int(qty) if float(qty).is_integer() else qty
         df.at[idx, "Precio Unitario"]    = unit
@@ -1125,8 +1133,8 @@ def recalc_derived(df: pd.DataFrame) -> pd.DataFrame:
         df.at[idx, "IVA 16%"]            = iva
         df.at[idx, "Total con IVA"]      = tot
         df.at[idx, "Diferencia final"]   = (
-            round((tot or 0) - (anx or 0), 2)
-            if tot is not None or anx is not None else None
+            round(float(tot) - float(anx), 2)
+            if tot is not None and anx is not None else None
         )
     return df
 
@@ -3039,13 +3047,14 @@ def _fill(rgb: str) -> PatternFill:
 
 def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
     """
-    Genera Excel con formato profesional.
+    Genera Excel con formato profesional alineado a las 16 columnas de _COLS.
     blank=True produce plantilla vacía con fórmulas vivas.
     """
     buf = io.BytesIO()
     wb  = openpyxl.Workbook()
     ws  = wb.active
-    ws.title = nombre[:31] if nombre else "Conciliación"
+    clean_title = re.sub(r'[\\/*?:\[\]]+', ' ', (nombre or '').strip()).strip().strip("'")
+    ws.title = clean_title[:31] if clean_title else "Conciliación"
 
     F_WHITE = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     F_HDR   = Font(name="Calibri", size=11, bold=True, color="000000")
@@ -3074,7 +3083,8 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
     )
     ws.print_options.horizontalCentered = True
 
-    n_rows = len(df)
+    df_clean = _normalize_editor_df(df)
+    n_rows = len(df_clean)
 
     for col_idx, width in enumerate(_WIDTHS_COL, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
@@ -3090,7 +3100,7 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
     for ci, hdr in enumerate(_COLS, 1):
         c = ws.cell(row=2, column=ci, value=hdr)
         c.font = F_HDR
-        c.fill = FILL_HDR_A if ci <= 12 else FILL_HDR_B
+        c.fill = FILL_HDR_A if ci <= 13 else FILL_HDR_B
         c.border = BD; c.alignment = AL_C
 
     DS = 3
@@ -3101,55 +3111,84 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
         c_.border = BD; c_.alignment = AL_R
         return c_
 
-    for i, row_dict in enumerate(df.to_dict('records'), DS):
+    for i, row_dict in enumerate(df_clean.to_dict('records'), DS):
         r = i
         ws.row_dimensions[r].height = 16.5
         blank_row = blank
 
-        c = ws.cell(row=r, column=1, value=str(row_dict.get("Tipo", "") or ""))
+        # 1 (A): Nº Sec
+        n_sec = _safe_f(row_dict.get("Nº Sec"))
+        c = ws.cell(row=r, column=1, value=int(n_sec) if n_sec is not None else (r - DS + 1))
         c.font = F_DATA; c.border = BD; c.alignment = AL_C
-        c = ws.cell(row=r, column=2, value=str(row_dict.get("Fecha", "") or ""))
-        c.font = F_DATA; c.border = BD; c.alignment = AL_C
-        c = ws.cell(row=r, column=3, value=str(row_dict.get("Rubro", "") or ""))
+
+        # 2 (B): Sección
+        c = ws.cell(row=r, column=2, value=str(row_dict.get("Sección", "") or ""))
         c.font = F_DATA; c.border = BD; c.alignment = AL_L
-        c = ws.cell(row=r, column=4, value=str(row_dict.get("QT", "Sí") or "Sí"))
-        c.font = F_DATA; c.border = BD; c.alignment = AL_C
-        c = ws.cell(row=r, column=5, value=str(row_dict.get("T. Cambio", "MXN") or "MXN"))
-        c.font = F_DATA; c.border = BD; c.alignment = AL_C
-        c = ws.cell(row=r, column=6, value=str(row_dict.get("(+ IVA)", "") or ""))
+
+        # 3 (C): Tipo
+        c = ws.cell(row=r, column=3, value=str(row_dict.get("Tipo", "") or ""))
         c.font = F_DATA; c.border = BD; c.alignment = AL_C
 
+        # 4 (D): Fecha
+        c = ws.cell(row=r, column=4, value=str(row_dict.get("Fecha", "") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # 5 (E): Rubro
+        c = ws.cell(row=r, column=5, value=str(row_dict.get("Rubro", "") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_L
+
+        # 6 (F): QT
+        c = ws.cell(row=r, column=6, value=str(row_dict.get("QT", "Sí") or "Sí"))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # 7 (G): T. Cambio
+        c = ws.cell(row=r, column=7, value=str(row_dict.get("T. Cambio", "MXN") or "MXN"))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # 8 (H): (+ IVA)
+        c = ws.cell(row=r, column=8, value=str(row_dict.get("(+ IVA)", "") or ""))
+        c.font = F_DATA; c.border = BD; c.alignment = AL_C
+
+        # 9 (I): Cantidad (soporta decimales sin truncar)
         q = _safe_f(row_dict.get("Cantidad"))
-        c = ws.cell(row=r, column=7, value=int(q) if q is not None else 1)
-        c.number_format = "0.00"; c.font = F_DATA; c.border = BD; c.alignment = AL_C
+        q_val = int(q) if (q is not None and float(q).is_integer()) else (q if q is not None else 1)
+        c = ws.cell(row=r, column=9, value=q_val)
+        c.number_format = "0.##"; c.font = F_DATA; c.border = BD; c.alignment = AL_C
 
+        # 10 (J): Precio Unitario
         pu_val = None if blank_row else _safe_f(row_dict.get("Precio Unitario"))
-        _money_cell(ws, r, 8, pu_val)
+        _money_cell(ws, r, 10, pu_val)
 
         val_iva = str(row_dict.get("(+ IVA)", "N/M")).strip().lower().replace("\u00ed", "i").replace("\u00c3\u00ad", "i")
         has_iva = val_iva in ["si", "incluido"]
 
-        c = ws.cell(row=r, column=9,  value=f'=IF(ISNUMBER(H{r}),G{r}*H{r},"")')
+        # 11 (K): Subtotal (Sin IVA) = I * J
+        c = ws.cell(row=r, column=11, value=f'=IF(ISNUMBER(J{r}),ROUND(I{r}*J{r},2),"")')
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        iva_formula = f'=IF(ISNUMBER(I{r}),I{r}*0.16,"")' if has_iva else None
-        c = ws.cell(row=r, column=10, value=iva_formula)
+        # 12 (L): IVA 16% = K * 0.16
+        iva_formula = f'=IF(ISNUMBER(K{r}),ROUND(K{r}*0.16,2),"")' if has_iva else None
+        c = ws.cell(row=r, column=12, value=iva_formula)
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
+        # 13 (M): Total con IVA = K + L
         if has_iva:
-            tot_formula = f'=IF(ISNUMBER(I{r}),IF(ISNUMBER(J{r}),I{r}+J{r},I{r}),"")'
+            tot_formula = f'=IF(ISNUMBER(K{r}),IF(ISNUMBER(L{r}),K{r}+L{r},K{r}),"")'
         else:
-            tot_formula = f'=IF(ISNUMBER(I{r}),I{r},"")'
-        c = ws.cell(row=r, column=11, value=tot_formula)
+            tot_formula = f'=IF(ISNUMBER(K{r}),K{r},"")'
+        c = ws.cell(row=r, column=13, value=tot_formula)
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
-        c = ws.cell(row=r, column=12, value=f'=IF(AND(ISNUMBER(K{r}),ISNUMBER(M{r})),K{r}-M{r},"")')
+        # 14 (N): Diferencia final = M - O
+        c = ws.cell(row=r, column=14, value=f'=IF(AND(ISNUMBER(M{r}),ISNUMBER(O{r})),M{r}-O{r},"")')
         c.number_format = _FMT_MONEY; c.font = F_DATA; c.border = BD; c.alignment = AL_R
 
+        # 15 (O): Monto en Anexo Escrito
         anx_val = None if blank_row else _safe_f(row_dict.get("Monto en Anexo Escrito"))
-        c = _money_cell(ws, r, 13, anx_val); c.font = F_BOLD
+        c = _money_cell(ws, r, 15, anx_val); c.font = F_BOLD
 
-        c = ws.cell(row=r, column=14, value="" if blank_row else str(row_dict.get("Observaciones", "") or ""))
+        # 16 (P): Observaciones
+        c = ws.cell(row=r, column=16, value="" if blank_row else str(row_dict.get("Observaciones", "") or ""))
         c.font = F_DATA; c.border = BD; c.alignment = AL_L
 
     if n_rows > 0:
@@ -3158,16 +3197,20 @@ def to_excel(df: pd.DataFrame, nombre: str = "", blank: bool = False) -> bytes:
         ws.row_dimensions[tot_row].height = 18
         c = ws.cell(row=tot_row, column=1, value="TOTALES")
         c.font = F_TOT; c.border = BD_MED
-        # Bordes en todas las celdas del rango de totales
         for ci in range(2, len(_COLS) + 1):
             cx = ws.cell(row=tot_row, column=ci)
             cx.border = BD_MED
-        # SUMAs: Subtotal (9/I), IVA 16% (10/J), Total con IVA (11/K)
-        for ci in (9, 10, 11):
+        # SUMIF excluyendo Presupuesto Global para Subtotal (11/K), IVA (12/L) y Total (13/M)
+        for ci in (11, 12, 13):
             col_l = get_column_letter(ci)
-            c = ws.cell(row=tot_row, column=ci, value=f"=SUM({col_l}{s_xl}:{col_l}{e_xl})")
+            formula = f'=SUMIF(C{s_xl}:C{e_xl},"<>Presupuesto Global",{col_l}{s_xl}:{col_l}{e_xl})'
+            c = ws.cell(row=tot_row, column=ci, value=formula)
             c.number_format = _FMT_MONEY; c.font = F_TOT
             c.fill = _fill("EBE2D1"); c.border = BD_MED; c.alignment = AL_R
+        # Suma de Monto en Anexo Escrito (15/O)
+        c = ws.cell(row=tot_row, column=15, value=f"=SUM(O{s_xl}:O{e_xl})")
+        c.number_format = _FMT_MONEY; c.font = F_TOT
+        c.fill = _fill("EBE2D1"); c.border = BD_MED; c.alignment = AL_R
 
     ws.freeze_panes = "A3"
 
